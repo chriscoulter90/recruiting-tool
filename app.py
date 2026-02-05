@@ -50,6 +50,13 @@ st.markdown("""
 # --- 2. CONSTANTS & FILES ---
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
+# STRICT FILTER LISTS
+STAFF_KEYWORDS = [
+    "coach", "director", "coordinator", "assistant", "manager", "analyst", 
+    "specialist", "trainer", "video", "operations", "quality control", 
+    "recruiting", "personnel", "chief of staff", "scout", "dietitian", "nutrition"
+]
+PLAYER_BIO_KEYWORDS = ["height:", "weight:", "class:", "hometown:", "high school:", "lbs", "freshman", "sophomore", "junior", "senior"]
 FOOTBALL_INDICATORS = ["football", "quarterback", "linebacker", "touchdown", "nfl", "bowl", "recruiting", "fbs", "fcs", "interception", "tackle", "gridiron"]
 NON_FOOTBALL_INDICATORS = {
     "Volleyball": ["volleyball", "set", "spike", "libero"], "Baseball": ["baseball", "inning", "homerun", "pitcher"],
@@ -74,7 +81,6 @@ SCHOOL_ALIASES = {
 def normalize_text(text):
     if pd.isna(text): return ""
     text = str(text).lower()
-    # Less aggressive removal: Keep 'state', 'tech', 'a&m' to preserve school identity
     for word in ['university', 'univ', 'college', 'the', 'of', 'athletics', 'inst']:
         text = text.replace(word, '')
     return re.sub(r'[^a-z0-9]', '', text).strip()
@@ -83,7 +89,6 @@ def normalize_text(text):
 def load_lookup():
     """Load coach database safely."""
     df = None
-    
     try:
         r = requests.get(GOOGLE_SHEET_CSV_URL, timeout=3)
         if r.ok:
@@ -98,10 +103,9 @@ def load_lookup():
                 try: df = pd.read_csv(possible_files[0], encoding='latin1')
                 except: pass
 
-    if df is None or df.empty: return {}, {}, {}, []
+    if df is None or df.empty: return {}, {}, {}, "Failed"
 
     cols_lower = {c.lower().strip(): c for c in df.columns}
-    
     def get_col_name(*candidates):
         for c in candidates:
             if c.lower() in cols_lower: return cols_lower[c.lower()]
@@ -121,7 +125,6 @@ def load_lookup():
 
     for _, row in df.iterrows():
         raw_school = str(row[c_school]).strip() if c_school and pd.notna(row[c_school]) else ""
-        
         for alias, real in SCHOOL_ALIASES.items():
             if alias.lower() == raw_school.lower(): raw_school = real
         
@@ -140,23 +143,18 @@ def load_lookup():
             n_key = normalize_text(full_name)
             l_key = normalize_text(last)
             
-            # School + Name
             if s_key: lookup[(s_key, n_key)] = rec
-            
-            # Name Only (Fallback)
             if n_key not in name_lookup: name_lookup[n_key] = []
             name_lookup[n_key].append(rec)
-            
-            # School + Last Name (Deep Fallback)
             if s_key:
                 if (s_key, l_key) not in lastname_lookup: lastname_lookup[(s_key, l_key)] = []
                 lastname_lookup[(s_key, l_key)].append(rec)
             
-    return lookup, name_lookup, lastname_lookup, []
+    return lookup, name_lookup, lastname_lookup, "Success"
 
 if "master_data" not in st.session_state:
     st.session_state["master_data"] = load_lookup()
-master_lookup, name_lookup, lastname_lookup, db_cols = st.session_state["master_data"]
+master_lookup, name_lookup, lastname_lookup, db_status = st.session_state["master_data"]
 
 def detect_sport(bio):
     text = str(bio).lower()
@@ -166,15 +164,29 @@ def detect_sport(bio):
         if sum(text.count(w) for w in keywords) > fb_score + 1: return None
     return "Football"
 
+def determine_role(title, bio_text):
+    # 1. Check Bio for Player Signs (Strongest Indicator)
+    bio_sample = str(bio_text)[:600].lower()
+    if any(k in bio_sample for k in PLAYER_BIO_KEYWORDS):
+        return "PLAYER"
+    
+    # 2. Check Title for Explicit Staff Keywords
+    title_lower = str(title).lower()
+    if any(k in title_lower for k in STAFF_KEYWORDS):
+        return "COACH/STAFF"
+    
+    # 3. Default to Player if no Staff keyword found
+    return "PLAYER"
+
 def parse_header(bio):
-    lines = [L.strip() for L in str(bio).split('\n') if L.strip()][:8]
-    # Expanded delimiters: try " - ", " | ", " : "
+    lines = [L.strip() for L in str(bio).split('\n') if L.strip()][:10]
     header = None
     for delimiter in [" - ", " | ", " : "]:
         header = next((L for L in lines if delimiter in L and "http" not in L), None)
         if header: break
         
-    extracted = {'Name': None, 'Title': "Staff", 'School': "Unknown", 'Role': 'COACH/STAFF', 'Last': ''}
+    extracted = {'Name': None, 'Title': "Unknown", 'School': "Unknown", 'Role': 'PLAYER', 'Last': ''}
+    
     if header:
         parts = re.split(r' - | \| | : ', header)
         if len(parts) >= 2:
@@ -183,10 +195,13 @@ def parse_header(bio):
             extracted['School'] = parts[-1].strip()
             if len(parts) > 2: extracted['Title'] = parts[1].strip()
             
+    # Normalize School
     for alias, real in SCHOOL_ALIASES.items():
         if alias.lower() in extracted['School'].lower(): extracted['School'] = real
-    if "202" in extracted['Title'] or "Roster" in extracted['Title']:
-        extracted['Role'] = "PLAYER"; extracted['Title'] = "Roster Member"
+        
+    # Determine Role (Smart Filter)
+    extracted['Role'] = determine_role(extracted['Title'], bio)
+    
     return extracted
 
 def get_snippet(text, keyword):
@@ -199,6 +214,9 @@ def get_snippet(text, keyword):
 
 # --- 4. SEARCH LOGIC ---
 st.markdown('<p class="instruction-text">Type in keywords to search college football webpage bios.<br>Put a comma between keywords for multiple searches (e.g., "Linebacker, Recruiting").</p>', unsafe_allow_html=True)
+
+if db_status == "Failed":
+    st.error("❌ Master Database Not Found. Contact info will be empty.")
 
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
@@ -244,15 +262,11 @@ if submit_button and keywords_str:
                         n_key = normalize_text(name)
                         l_key = normalize_text(meta['Last'])
                         
-                        # MATCHING LOGIC (Cascading)
                         match = {}
-                        # 1. Exact Match
                         if (s_key, n_key) in master_lookup:
                             match = master_lookup[(s_key, n_key)]
-                        # 2. Last Name + School Match
                         elif (s_key, l_key) in lastname_lookup:
                             match = lastname_lookup[(s_key, l_key)][0]
-                        # 3. Name Only Match (Ignore School - Last Resort)
                         elif n_key in name_lookup:
                             match = name_lookup[n_key][0]
 
@@ -298,6 +312,7 @@ if not st.session_state['search_results'].empty:
         worksheet = writer.sheets['Results']
         worksheet.set_column(0, 0, 15)
         worksheet.set_column(1, 5, 30)
-        worksheet.set_column(6, 6, 50)
+        worksheet.set_column(6, 6, 50) # Context (Wide)
+        worksheet.set_column(7, 7, 50) # Full Bio (Wide)
     
     st.download_button("💾 DOWNLOAD EXCEL", buffer.getvalue(), file_name_dynamic, "application/vnd.ms-excel")
