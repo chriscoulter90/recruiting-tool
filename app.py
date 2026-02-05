@@ -4,41 +4,50 @@ import glob
 import re
 import gc
 import io
-from datetime import datetime
 import requests
 
-# 1. LIGHTWEIGHT STARTUP
-st.set_page_config(page_title="Recruiting Search", layout="wide")
-st.title("🏈 Recruiting Tool - Deep Extraction Mode")
-st.write("### ✅ System Status: ONLINE")
+# --- 1. PROFESSIONAL UI CONFIGURATION ---
+st.set_page_config(page_title="Recruiting Search Engine", page_icon="🏈", layout="wide")
 
-# 2. CONSTANTS
+# Custom CSS to hide technical details and make it look clean
+st.markdown("""
+    <style>
+    .stProgress > div > div > div > div { background-color: #1f77b4; }
+    .reportview-container { margin-top: -2em; }
+    header {visibility: hidden;}
+    footer {visibility: hidden;}
+    </style>
+    """, unsafe_allow_html=True)
+
+st.title("🏈 Football Recruiting Search Engine")
+st.markdown("### National Coaching & Roster Database")
+
+# --- 2. CONSTANTS & SETUP ---
 MASTER_DB_FILE = 'REC_CONS_MASTER.csv' 
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
-# 3. VERIFY FILES
+# Verify Database (Silently)
 chunk_files = glob.glob("chunk_*.csv")
 if not chunk_files:
-    st.error("❌ No chunk files found.")
+    st.error("⚠️ Database Error: Source files not found.")
     st.stop()
-else:
-    st.info(f"📂 Ready to scan {len(chunk_files)} database chunks.")
 
-# 4. LAZY LOAD BUTTON
+# --- 3. LAZY LOADING (The "Start Engine" Button) ---
 if "engine_loaded" not in st.session_state:
     st.session_state["engine_loaded"] = False
 
 if not st.session_state["engine_loaded"]:
-    if st.button("🚀 CLICK TO ACTIVATE SEARCH ENGINE"):
+    st.info("Database is offline. Click below to initialize the search engine.")
+    if st.button("🚀 Initialize Database"):
         st.session_state["engine_loaded"] = True
         st.rerun()
 
-# 5. SEARCH ENGINE LOGIC
+# --- 4. CORE SEARCH LOGIC (Hidden until active) ---
 if st.session_state["engine_loaded"]:
     import pandas as pd
     
-    # --- HELPER: MASTER DB LOOKUP ---
-    @st.cache_data
+    # --- A. MASTER DATABASE LOOKUP ---
+    @st.cache_data(show_spinner=False)
     def load_master_lookup():
         try:
             if not os.path.exists(MASTER_DB_FILE):
@@ -72,39 +81,45 @@ if st.session_state["engine_loaded"]:
             return lookup, name_lookup
         except: return {}, {}
 
-    # --- HELPER: DEEP NAME EXTRACTOR ---
-    def extract_identity_from_bio(bio):
+    # --- B. SMART PARSER (The "Unknown" Killer) ---
+    def parse_title_line(bio):
         """
-        Extracts Name from the 'SOURCE:' URL found in the bio.
+        Extracts metadata from the 'Name - Title - School' line found in scraped bios.
         """
-        extracted_name = None
-        extracted_role = "COACH/STAFF"
+        extracted = {'Name': None, 'Title': None, 'School': None, 'Role': 'COACH/STAFF'}
         
-        # 1. Find URL in bio
-        url_match = re.search(r"SOURCE: (https?://[^\s]+)", str(bio))
-        if url_match:
-            url = url_match.group(1)
-            # Remove trailing extracted numbers/garbage
-            clean_url = url.split('?')[0].rstrip('/')
-            parts = clean_url.split('/')
+        # 1. Clean up bio to find the header line
+        # The header usually comes right after the URL
+        clean_bio = str(bio).replace('\r', '\n')
+        lines = [L.strip() for L in clean_bio.split('\n') if L.strip()]
+        
+        # Look for the line with hyphens that isn't the URL
+        header_line = None
+        for line in lines[:10]: # Check first 10 lines only
+            if " - " in line and "SOURCE" not in line and "http" not in line:
+                header_line = line
+                break
+        
+        if header_line:
+            parts = [p.strip() for p in header_line.split(' - ')]
             
-            # The name is usually the last part (e.g. /staff/bryan-harmon)
-            # OR the second to last if there is an ID (e.g. /roster/joe-smith/1234)
-            slug = parts[-1]
-            if slug.isdigit() or len(slug) < 3:
-                slug = parts[-2]
+            # PATTERN 1: Name - Title - School (3 parts)
+            if len(parts) >= 3:
+                extracted['Name'] = parts[0]
+                extracted['Title'] = parts[1]
+                extracted['School'] = parts[2]
             
-            if '-' in slug:
-                # Remove digits (e.g. joe-smith-2)
-                slug = re.sub(r'\d+', '', slug).strip('-')
-                extracted_name = slug.replace('-', ' ').title()
-
-        # 2. Guess Role from Bio text
-        bio_lower = str(bio).lower()
-        if "roster" in bio_lower or "player" in bio_lower or re.search(r"\b202[0-9]\b", bio_lower):
-            extracted_role = "PLAYER"
-            
-        return extracted_name, extracted_role
+            # PATTERN 2: Name - School (2 parts)
+            elif len(parts) == 2:
+                extracted['Name'] = parts[0]
+                extracted['School'] = parts[1]
+                
+            # SPECIAL: Player Pattern (Name - Year - Football - School)
+            if "202" in str(extracted['Title']) or "Football" == extracted['Title']:
+                extracted['Role'] = "PLAYER"
+                extracted['Title'] = "Roster Member"
+                
+        return extracted
 
     def get_snippet(text, keyword):
         if pd.isna(text): return ""
@@ -115,36 +130,41 @@ if st.session_state["engine_loaded"]:
             return f"...{clean[s:e].strip()}..."
         return f"...{clean[:100]}..."
 
-    # --- MAIN SEARCH UI ---
+    # --- MAIN INTERFACE ---
     master_lookup, name_lookup = load_master_lookup()
-    st.success("✅ Smart Extractor Loaded")
+    st.success("✅ Database Online & Ready")
     
-    keywords_str = st.text_input("Enter Keywords (comma separated):", placeholder="e.g. tallahassee, atlanta")
+    keywords_str = st.text_input("Enter Search Keywords:", placeholder="e.g. tallahassee, area recruiter, quarterback")
     
     if st.button("Run Search"):
         if not keywords_str:
-            st.warning("Please enter a keyword.")
+            st.warning("Please enter a keyword to search.")
         else:
             keywords = [k.strip() for k in keywords_str.split(',') if k.strip()]
             results = []
             
+            # Professional Progress Bar
             progress_bar = st.progress(0)
             status_text = st.empty()
             
             try: chunk_files.sort(key=lambda x: int(re.search(r'\d+', x).group()))
             except: pass
 
+            total_chunks = len(chunk_files)
+            
             for i, file in enumerate(chunk_files):
-                status_text.text(f"Scanning file {i+1} of {len(chunk_files)}...")
-                progress_bar.progress((i + 1) / len(chunk_files))
+                # Generic progress update
+                status_text.caption(f"Scanning database sector {i+1}/{total_chunks}...")
+                progress_bar.progress((i + 1) / total_chunks)
                 
                 try:
-                    # Low-Memory Read
-                    df_iter = pd.read_csv(file, chunksize=500, on_bad_lines='skip') 
+                    # Optimized Read
+                    df_iter = pd.read_csv(file, chunksize=1000, on_bad_lines='skip') 
                     
                     for chunk in df_iter:
-                        # Fix Columns
                         chunk.columns = [c.strip() for c in chunk.columns]
+                        
+                        # Normalize Columns
                         for c in chunk.columns:
                             if c.lower() in ['bio', 'full_bio', 'description', 'full bio']: 
                                 chunk.rename(columns={c: 'Full_Bio'}, inplace=True)
@@ -154,87 +174,84 @@ if st.session_state["engine_loaded"]:
                         
                         if 'Full_Bio' not in chunk.columns: continue
                         
-                        # Ensure columns exist
-                        if 'Name' not in chunk.columns: chunk['Name'] = "Unknown"
-                        if 'School' not in chunk.columns: chunk['School'] = "Unknown"
-                        if 'Title' not in chunk.columns: chunk['Title'] = "Unknown"
-
                         # Search
                         mask = chunk['Full_Bio'].str.contains('|'.join(keywords), case=False, na=False)
                         if mask.any():
                             found = chunk[mask].copy()
                             
-                            # --- DEEP EXTRACTION LOGIC ---
-                            def repair_row(row):
-                                # 1. Extract Name from URL if missing
-                                if row['Name'] in ["Unknown", "", "nan"] or len(str(row['Name'])) < 3:
-                                    ex_name, ex_role = extract_identity_from_bio(row['Full_Bio'])
-                                    if ex_name:
-                                        row['Name'] = ex_name
-                                        row['Role'] = ex_role
+                            # --- ENRICHMENT LOGIC ---
+                            def enrich_row(row):
+                                # 1. Parse the Header Line (The fix for "Unknown")
+                                meta = parse_title_line(row['Full_Bio'])
                                 
-                                # 2. Master DB Lookup to fill blanks
+                                # Only overwrite if current is Unknown/Empty
+                                if pd.isna(row.get('Name')) or str(row.get('Name')) == "Unknown" or len(str(row.get('Name'))) < 3:
+                                    if meta['Name']: row['Name'] = meta['Name']
+                                
+                                if pd.isna(row.get('School')) or str(row.get('School')) == "Unknown":
+                                    if meta['School']: row['School'] = meta['School']
+                                    
+                                if pd.isna(row.get('Title')) or str(row.get('Title')) == "Unknown":
+                                    if meta['Title']: row['Title'] = meta['Title']
+                                
+                                if meta['Role'] == "PLAYER": row['Role'] = "PLAYER"
+                                else: row['Role'] = "COACH/STAFF"
+
+                                # 2. Master DB Lookup
                                 def n(t): return re.sub(r'[^a-z0-9]', '', str(t).lower())
                                 
-                                s_norm = n(row['School'])
-                                n_norm = n(row['Name'])
+                                s_norm = n(row.get('School', ''))
+                                n_norm = n(row.get('Name', ''))
                                 
                                 match = master_lookup.get((s_norm, n_norm))
                                 
-                                # If no match, try fuzzy name match
+                                # Backup Lookup
                                 if not match:
                                     candidates = name_lookup.get(n_norm, [])
-                                    # Try to find a school match in the bio text
-                                    bio_lower = str(row['Full_Bio']).lower()
-                                    for cand in candidates:
-                                        cand_school_norm = n(cand['school'])
-                                        # If candidate school is in the bio, assume it's them
-                                        if cand_school_norm and cand_school_norm in bio_lower:
-                                            match = cand
-                                            break
+                                    # If extracted school is in bio, assume match
+                                    if len(candidates) == 1: match = candidates[0]
                                 
                                 if match:
                                     row['School'] = match['school']
                                     row['Title'] = match['title']
                                     row['Email'] = match['email']
                                     row['Twitter'] = match['twitter']
-                                    row['Role'] = "COACH/STAFF"
                                 
                                 return row
 
-                            found['Role'] = "COACH/STAFF" # Default
-                            found['Email'] = ""
-                            found['Twitter'] = ""
+                            found = found.apply(enrich_row, axis=1)
                             
-                            found = found.apply(repair_row, axis=1)
+                            # Clean up garbage rows
+                            found = found[~found['Name'].str.contains("Skip To|Official|Website", case=False, na=False)]
+                            
                             found['Context_Snippet'] = found['Full_Bio'].apply(lambda x: get_snippet(x, keywords[0]))
-                            
                             results.append(found)
                         
                         del chunk
                     gc.collect()
 
-                except Exception as e:
-                    print(f"Skipped {file}: {e}")
-                    continue
+                except: continue
 
             status_text.empty(); progress_bar.empty()
 
             if results:
                 final_df = pd.concat(results)
                 
-                # Filter final columns
+                # Selection & Ordering
                 cols = ['Role', 'Name', 'Title', 'School', 'Email', 'Twitter', 'Context_Snippet', 'Full_Bio']
                 final_cols = [c for c in cols if c in final_df.columns]
                 final_df = final_df[final_cols]
                 
-                st.subheader(f"🎉 Found {len(final_df)} Matches!")
+                # Remove duplicates
+                final_df.drop_duplicates(subset=['Name', 'School'], inplace=True)
+                
+                st.success(f"🎉 Found {len(final_df)} matches found.")
                 st.dataframe(final_df)
                 
                 # Excel Download
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     final_df.to_excel(writer, index=False, sheet_name="Results")
-                st.download_button("💾 Download Excel", buffer.getvalue(), "Search_Results.xlsx", "application/vnd.ms-excel")
+                st.download_button("💾 Download Results (Excel)", buffer.getvalue(), "Search_Results.xlsx", "application/vnd.ms-excel")
             else:
-                st.warning("No matches found.")
+                st.warning("No matches found for your criteria.")
