@@ -6,6 +6,7 @@ import gc
 import io
 import requests
 import pandas as pd
+from datetime import datetime
 
 # --- 1. UI CONFIGURATION ---
 st.set_page_config(page_title="Coulter Recruiting", page_icon="🏈", layout="wide")
@@ -15,29 +16,16 @@ st.markdown("""
     header {visibility: hidden;}
     footer {visibility: hidden;}
     .block-container {padding-top: 1rem;}
-    /* Flashy Title */
     .title-text {
-        text-align: center;
-        font-size: 3.5rem;
-        font-weight: 800;
-        color: #002B5C;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        margin-bottom: 0;
+        text-align: center; font-size: 3rem; font-weight: 800; color: #002B5C;
+        text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0;
     }
     .subtitle-text {
-        text-align: center;
-        font-size: 1.2rem;
-        font-weight: 500;
-        color: #B3A369;
-        margin-top: -10px;
-        margin-bottom: 40px;
-        letter-spacing: 3px;
+        text-align: center; font-size: 1.2rem; font-weight: 500; color: #B3A369;
+        margin-top: -5px; margin-bottom: 30px; letter-spacing: 3px;
     }
     .stTextInput>div>div>input {
-        border: 2px solid #002B5C;
-        border-radius: 5px;
-        padding: 10px;
+        border: 2px solid #002B5C; border-radius: 5px; padding: 10px;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -45,11 +33,11 @@ st.markdown("""
 st.markdown('<div class="title-text">COULTER RECRUITING</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtitle-text">SEARCH ENGINE</div>', unsafe_allow_html=True)
 
-# --- 2. CONSTANTS (EXACT MATCH TO LOCAL) ---
+# --- 2. CONSTANTS ---
 MASTER_DB_FILE = 'REC_CONS_MASTER.csv' 
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
-# From your RecruitingApp.py
+# Exact lists from Local Script
 FORBIDDEN_SPORTS = [
     "Volleyball", "Baseball", "Softball", "Soccer", "Tennis", "Golf", 
     "Swimming", "Lacrosse", "Hockey", "Wrestling", "Gymnastics", 
@@ -65,20 +53,15 @@ GARBAGE_PHRASES = [
 ]
 
 SCHOOL_CORRECTIONS = {
-    "Boston": "Boston College",
-    "Miami": "Miami (FL)",
-    "Ole": "Ole Miss",
-    "Central Methodist": "Central Methodist University",
-    "University of Auburn": "Auburn University"
+    "Boston": "Boston College", "Miami": "Miami (FL)", "Ole": "Ole Miss",
+    "Central Methodist": "Central Methodist University", "University of Auburn": "Auburn University"
 }
 
-# --- 3. HELPER FUNCTIONS (THE "BRAIN") ---
-
-# CRITICAL: This must match your local script exactly to get the same matches
+# --- 3. HELPER FUNCTIONS ---
 def normalize_text(text):
     if pd.isna(text): return ""
     text = str(text).lower()
-    # Remove specific words that cause mismatch (State, University, etc)
+    # Aggressive cleaning to match local logic
     for word in ['university', 'univ', 'college', 'state', 'the', 'of', 'athletics', 'inst']:
         text = text.replace(word, '')
     return re.sub(r'[^a-z0-9]', '', text).strip()
@@ -115,15 +98,12 @@ def load_lookup():
         return lookup, name_lookup
     except: return {}, {}
 
-# Initialize Data
 if "master_data" not in st.session_state:
     st.session_state["master_data"] = load_lookup()
 master_lookup, name_lookup = st.session_state["master_data"]
 
 def parse_header_exact(bio):
     extracted = {'Name': None, 'Title': None, 'School': None, 'Role': 'COACH/STAFF'}
-    
-    # Normalize Dashes (Mac vs Cloud Fix)
     clean_text = str(bio).replace('\r', '\n').replace('–', '-').replace('—', '-')
     lines = [L.strip() for L in clean_text.split('\n') if L.strip()]
     
@@ -153,24 +133,20 @@ def parse_header_exact(bio):
         elif len(clean_parts) == 1:
             extracted['Name'] = clean_parts[0]
 
-        # Fix Swaps
         if extracted['Title'] and ("University" in extracted['Title'] or "College" in extracted['Title']):
             temp = extracted['School']
             extracted['School'] = extracted['Title']
             extracted['Title'] = temp if temp else "Staff"
-
-        # Manual Corrections (From Local Script)
+        
         if extracted['School'] in SCHOOL_CORRECTIONS:
             extracted['School'] = SCHOOL_CORRECTIONS[extracted['School']]
 
-        # Player Detection
         for val in [str(extracted['Title']), str(extracted['School'])]:
             if "202" in val or "203" in val:
                 extracted['Role'] = "PLAYER"
                 extracted['Title'] = "Roster Member"
             if "Football" == val:
                  if extracted['Role'] == "COACH/STAFF": extracted['Title'] = "Staff"
-                
     return extracted
 
 def get_snippet(text, keyword):
@@ -182,7 +158,7 @@ def get_snippet(text, keyword):
         return f"...{clean[s:e].strip()}..."
     return f"...{clean[:100]}..."
 
-# --- 5. SEARCH LOGIC ---
+# --- 4. SEARCH LOGIC ---
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     keywords_str = st.text_input("", placeholder="🔍 Enter keywords (e.g. Tallahassee, Quarterback)...")
@@ -229,7 +205,7 @@ if run_search or keywords_str:
                             found = chunk[mask].copy()
                             
                             def clean_and_fill(row):
-                                # 1. Parse
+                                # 1. Parse Header
                                 meta = parse_header_exact(row['Full_Bio'])
                                 
                                 name = row.get('Name', '')
@@ -243,22 +219,23 @@ if run_search or keywords_str:
                                 
                                 role = meta['Role']
 
-                                # 2. Forbidden Sport Check
+                                # 2. Forbidden Check
                                 header_check = (str(title) + " " + str(school) + " " + str(row['Full_Bio'])[:200]).lower()
                                 for sport in FORBIDDEN_SPORTS:
                                     if sport.lower() in header_check and "football" not in header_check:
-                                        return None # DROP ROW
+                                        return None 
 
-                                # 3. Master Lookup (Matching Local Logic)
-                                match = None
+                                # 3. Master Lookup (AGGRESSIVE MATCH)
                                 match = master_lookup.get((normalize_text(school), normalize_text(name)))
                                 
+                                # If no strict match, check fuzzy Name Match
                                 if not match:
                                     candidates = name_lookup.get(normalize_text(name), [])
                                     if len(candidates) == 1: 
+                                        # Unique Name? TRUST IT. This fixes "ASU" vs "Arizona State"
                                         match = candidates[0]
                                     elif len(candidates) > 1:
-                                        # Fuzzy School Match inside Candidates
+                                        # Multiple? Check if school name is vaguely similar
                                         n_school = normalize_text(school)
                                         for cand in candidates:
                                             n_cand = normalize_text(cand['school'])
@@ -267,27 +244,26 @@ if run_search or keywords_str:
                                 
                                 email = row.get('Email', '')
                                 twitter = row.get('Twitter', '')
-                                sport_val = "Football" # Default
+                                sport_val = "Football"
                                 
                                 if match:
                                     if not email: email = match['email']
                                     if not twitter: twitter = match['twitter']
                                     if title in ["Staff", "Unknown", "Football"]: title = match['title']
-                                    school = match['school'] # Use Master DB School Name
+                                    # KEY FIX: Overwrite Scraped School with Master DB School
+                                    school = match['school'] 
                                 
-                                # Flatten Bio
                                 flat_bio = str(row['Full_Bio']).replace('\n', ' ').replace('\r', ' ').strip()
                                 flat_bio = re.sub(r'\s+', ' ', flat_bio)
                                 
                                 return pd.Series([role, name, title, school, sport_val, email, twitter, flat_bio])
 
                             enriched = found.apply(clean_and_fill, axis=1)
-                            
-                            # Drop dropped rows (Forbidden sports)
                             enriched.dropna(how='all', inplace=True) 
                             
                             if not enriched.empty:
                                 enriched.columns = ['Role', 'Name', 'Title', 'School', 'Sport', 'Email', 'Twitter', 'Full_Bio']
+                                # Context Snippet Last (To match local)
                                 enriched['Context_Snippet'] = enriched['Full_Bio'].apply(lambda x: get_snippet(x, keywords[0]))
                                 results.append(enriched)
                             
@@ -300,23 +276,26 @@ if run_search or keywords_str:
             if results:
                 final_df = pd.concat(results)
                 
-                # Cleanup
                 final_df = final_df[~final_df['Name'].str.contains("Skip To|Official|Javascript", case=False, na=False)]
                 final_df.dropna(subset=['Name'], inplace=True)
                 
-                # Sort: Role (Coach=0, Player=1) -> School -> Name
+                # Sort: Role -> School -> Name
                 final_df['Role_Sort'] = final_df['Role'].apply(lambda x: 1 if "PLAYER" in str(x).upper() else 0)
                 final_df.sort_values(by=['Role_Sort', 'School', 'Name'], ascending=[True, True, True], inplace=True)
                 final_df.drop(columns=['Role_Sort'], inplace=True)
                 
-                # EXACT COLUMN ORDER FROM LOCAL FILE
+                # COLUMNS: Context Snippet BEFORE Full Bio
                 cols = ['Role', 'Name', 'Title', 'School', 'Sport', 'Email', 'Twitter', 'Context_Snippet', 'Full_Bio']
                 final_df = final_df[cols]
                 
                 st.success(f"🎉 Found {len(final_df)} matches.")
                 st.dataframe(final_df, use_container_width=True)
                 
-                # Excel Export
+                # Dynamic Filename: keyword_date.xlsx
+                safe_kw = keywords[0].replace(' ', '_')
+                date_str = datetime.now().strftime("%Y-%m-%d")
+                file_name = f"{safe_kw}_{date_str}.xlsx"
+
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     final_df.to_excel(writer, index=False, sheet_name="Results")
@@ -325,6 +304,6 @@ if run_search or keywords_str:
                     cell_format = workbook.add_format({'text_wrap': False, 'valign': 'top'})
                     worksheet.set_column('A:I', 25, cell_format)
                     
-                st.download_button("💾 DOWNLOAD RESULTS (EXCEL)", buffer.getvalue(), "Coulter_Recruiting_Results.xlsx", "application/vnd.ms-excel", type="primary")
+                st.download_button("💾 DOWNLOAD RESULTS (EXCEL)", buffer.getvalue(), file_name, "application/vnd.ms-excel", type="primary")
             else:
                 st.warning("No matches found.")
