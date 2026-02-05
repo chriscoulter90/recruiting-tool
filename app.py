@@ -9,22 +9,20 @@ import pandas as pd
 from datetime import datetime
 from collections import Counter
 
-# --- 1. UI CONFIGURATION (RED & BLACK THEME) ---
+# --- 1. UI CONFIGURATION ---
 st.set_page_config(page_title="Coulter Recruiting", page_icon="🏈", layout="wide")
 
 st.markdown("""
     <style>
-    /* Global Font */
     html, body, [class*="css"] {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        background-color: #FAFAFA; 
-        color: #111111;
+        background-color: #F5F5F7; 
+        color: #1D1D1F;
     }
     header {visibility: hidden;}
     footer {visibility: hidden;}
     .block-container {padding-top: 2rem;}
 
-    /* HEADER: Red & Black Gradient */
     .header-container {
         background: linear-gradient(135deg, #8B0000 0%, #1A1A1A 100%);
         padding: 45px;
@@ -53,40 +51,23 @@ st.markdown("""
         letter-spacing: 3px; 
     }
 
-    /* INPUT FIELD */
     .stTextInput > div > div > input {
-        border-radius: 8px; 
-        border: 2px solid #E0E0E0; 
-        padding: 15px 20px; 
-        font-size: 18px; 
-        color: #333;
-        background-color: #FFF;
-        transition: all 0.3s ease;
+        border-radius: 8px; border: 2px solid #E0E0E0; padding: 15px 20px; font-size: 18px; 
+        color: #333; background-color: #FFF; transition: all 0.3s ease;
     }
     .stTextInput > div > div > input:focus {
-        border-color: #8B0000;
-        box-shadow: 0 0 0 3px rgba(139, 0, 0, 0.1);
+        border-color: #8B0000; box-shadow: 0 0 0 3px rgba(139, 0, 0, 0.1);
     }
 
-    /* BUTTON: Red Gradient */
     .stButton > button {
         background: linear-gradient(90deg, #B22222 0%, #800000 100%);
-        color: white;
-        border-radius: 8px;
-        padding: 15px 30px;
-        font-weight: 700;
-        border: none;
-        width: 100%;
-        text-transform: uppercase;
-        letter-spacing: 1px;
+        color: white; border-radius: 8px; padding: 15px 30px; font-weight: 700; 
+        border: none; width: 100%; text-transform: uppercase; letter-spacing: 1px; 
         transition: transform 0.1s ease;
     }
     .stButton > button:hover {
-        transform: scale(1.02);
-        box-shadow: 0 5px 15px rgba(139, 0, 0, 0.3);
+        transform: scale(1.02); box-shadow: 0 5px 15px rgba(139, 0, 0, 0.3);
     }
-    
-    /* DATAFRAME CLEANUP */
     .stDataFrame { border: 1px solid #ddd; border-radius: 8px; }
     </style>
     """, unsafe_allow_html=True)
@@ -102,14 +83,13 @@ st.markdown("""
 MASTER_DB_FILE = 'REC_CONS_MASTER.csv' 
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
-# STRICTER SPORTS FILTERS
+# A. KEYWORDS FOR CONTEXT SCANNING
 FOOTBALL_INDICATORS = [
     "football", "quarterback", "linebacker", "touchdown", "nfl", "bowl", 
     "offensive", "defensive", "special teams", "recruiting", "fbs", "fcs",
     "interception", "tackle", "gridiron", "playoff", "super bowl", "pro bowl"
 ]
 
-# Explicitly exclude "Flag Football" and other variants
 NON_FOOTBALL_INDICATORS = {
     "Volleyball": ["volleyball", "set", "spike", "libero", "dig", "kill", "block"],
     "Baseball": ["baseball", "inning", "homerun", "pitcher", "dugout", "mlb", "batting"],
@@ -118,14 +98,21 @@ NON_FOOTBALL_INDICATORS = {
     "Softball": ["softball", "pitcher", "inning"],
     "Track": ["track", "sprint", "hurdle", "relay", "marathon"],
     "Swimming": ["swim", "dive", "freestyle", "breaststroke", "pool"],
-    "Lacrosse": ["lacrosse", "stick", "goalie", "crease"],
-    "Flag Football": ["flag football", "women's flag", "flag roster"]
+    "Lacrosse": ["lacrosse", "stick", "goalie", "crease"]
 }
 
 GARBAGE_PHRASES = [
     "Official Athletics Website", "Official Website", "Composite", 
     "Javascript is required", "Skip To Main Content", "Official Football Roster",
     "View Full Profile", "Related Headlines", "Source:", "https://"
+]
+
+# POISON PILLS: If these appear, DELETE the row immediately.
+POISON_PILLS = [
+    "Flag Football", "Women's Flag", "Volleyball", "Baseball", "Softball", 
+    "Soccer", "Tennis", "Golf", "Swimming", "Lacrosse", "Hockey", 
+    "Wrestling", "Gymnastics", "Basketball", "Track & Field", "Crew", 
+    "Rowing", "Sailing", "Cheerleading", "Fencing", "Spirit Squad"
 ]
 
 BAD_NAMES = [
@@ -202,35 +189,22 @@ def load_lookup():
         if not os.path.exists(MASTER_DB_FILE):
             r = requests.get(GOOGLE_SHEET_CSV_URL, timeout=5)
             with open(MASTER_DB_FILE, 'wb') as f: f.write(r.content)
-        
         try: df = pd.read_csv(MASTER_DB_FILE, encoding='utf-8')
         except: df = pd.read_csv(MASTER_DB_FILE, encoding='latin1')
-        
         lookup, name_lookup = {}, {}
-        cols = df.columns
-        email_col = next((c for c in cols if 'Email' in c), None)
-        twitter_col = next((c for c in cols if 'Twitter' in c), None)
-        title_col = next((c for c in cols if 'Title' in c), None)
-        
+        email_col = next((c for c in df.columns if 'Email' in c), None)
+        twitter_col = next((c for c in df.columns if 'Twitter' in c), None)
+        title_col = next((c for c in df.columns if 'Title' in c), None)
         for _, row in df.iterrows():
             s_raw = str(row.get('School', '')).strip()
-            s_key = normalize_text(s_raw)
-            n_key = normalize_text(f"{row.get('First name', '')}{row.get('Last name', '')}")
-            
+            s_key, n_key = normalize_text(s_raw), normalize_text(f"{row.get('First name', '')}{row.get('Last name', '')}")
             if n_key:
-                rec = {
-                    'email': str(row.get(email_col, '')).strip() if email_col else "",
-                    'twitter': str(row.get(twitter_col, '')).strip() if twitter_col else "",
-                    'title': str(row.get(title_col, '')).strip() if title_col else "",
-                    'school': s_raw 
-                }
+                rec = {'email': str(row.get(email_col, '')).strip() if email_col else "", 'twitter': str(row.get(twitter_col, '')).strip() if twitter_col else "", 'title': str(row.get(title_col, '')).strip() if title_col else "", 'school': s_raw}
                 lookup[(s_key, n_key)] = rec
                 for alias, real_name in SCHOOL_ALIASES.items():
-                    if s_raw == real_name:
-                         lookup[(normalize_text(alias), n_key)] = rec
+                    if s_raw == real_name: lookup[(normalize_text(alias), n_key)] = rec
                 if n_key not in name_lookup: name_lookup[n_key] = []
                 name_lookup[n_key].append(rec)
-                
         return lookup, name_lookup
     except: return {}, {}
 
@@ -251,11 +225,14 @@ def detect_sport_context(bio):
     if pd.isna(bio): return "Uncertain"
     text = str(bio)
     analysis_text = text[200:].lower() if len(text) > 500 else text.lower()
+    
+    # 1. POISON PILL CHECK (Nuclear Option)
+    for poison in POISON_PILLS:
+        if poison.lower() in analysis_text[:1000]: return poison # Reject immediately
 
     fb_score = sum(analysis_text.count(w) for w in FOOTBALL_INDICATORS)
     max_other_score = 0
     likely_other_sport = None
-    
     for sport, keywords in NON_FOOTBALL_INDICATORS.items():
         score = sum(analysis_text.count(w) for w in keywords)
         if score > max_other_score:
@@ -267,117 +244,77 @@ def detect_sport_context(bio):
     else: return "Football" if "football" in text[:300].lower() else "Uncertain"
 
 def detect_player_by_context(bio, title):
-    """
-    Scans bio for player markers.
-    """
     text = str(bio).lower()[:800]
-    
-    # 0. Header Hints
     if "roster" in str(title).lower(): return True
-
-    # 1. Class Year Indicators
-    if any(x in text for x in ["freshman", "sophomore", "junior", "senior", "redshirt", "class of 20"]):
-        return True
-    
-    # 2. Physical Stats (e.g. 6-2, 200 lbs)
-    if re.search(r"\d['’]-?\d+\"?\s+\d{2,3}\s?lbs", text):
-        return True
-        
-    # 3. Position Abbreviations followed by hometown/high school context
-    if re.search(r"\b(qb|wr|rb|te|ol|dl|lb|db|saf|cb|pk|p|ls)\b", text):
-        if "hometown" in text or "high school" in text:
-            return True
-            
-    # 4. Action Keywords for Players
+    if any(x in text for x in ["freshman", "sophomore", "junior", "senior", "redshirt", "class of 20"]): return True
+    if re.search(r"\d['’]-?\d+\"?\s+\d{2,3}\s?lbs", text): return True
+    if re.search(r"\b(qb|wr|rb|te|ol|dl|lb|db|saf|cb|pk|p|ls)\b", text) and ("hometown" in text or "high school" in text): return True
     if "punt" in text or "kick" in text or "rushing" in text or "tackle" in text:
-        # Avoid coaches who "coached punters"
-        if "coach" not in str(title).lower():
-            return True
-
+        if "coach" not in str(title).lower(): return True
     return False
 
 def extract_title_from_text(bio):
     bio_intro = str(bio)[:500] 
     for title in JOB_TITLES:
-        if re.search(r"\b" + re.escape(title) + r"\b", bio_intro, re.IGNORECASE):
-            return title
+        if re.search(r"\b" + re.escape(title) + r"\b", bio_intro, re.IGNORECASE): return title
     return "Staff"
 
 def parse_header_smart(bio):
     extracted = {'Name': None, 'Title': None, 'School': None, 'Role': 'COACH/STAFF'}
-    
     url_school = detect_school_from_url(bio)
     if url_school: extracted['School'] = url_school
-
+    
     clean_text = str(bio).replace('\r', '\n').replace('–', '-').replace('—', '-')
     lines = [L.strip() for L in clean_text.split('\n') if L.strip()]
-    
     header = None
     for line in lines[:8]:
         if " - " in line and "http" not in line and "SOURCE" not in line:
-            header = line
-            break
+            header = line; break
             
     if header:
         parts = [p.strip() for p in header.split(' - ')]
         clean_parts = [p for p in parts if not any(g.lower() in p.lower() for g in GARBAGE_PHRASES)]
-        
-        if len(clean_parts) >= 3:
-            extracted['Name'], extracted['Title'] = clean_parts[0], clean_parts[1]
-            if not extracted['School']: extracted['School'] = clean_parts[2]
-        elif len(clean_parts) == 2:
-            extracted['Name'] = clean_parts[0]
-            if not extracted['School']: extracted['School'] = clean_parts[1]
-            extracted['Title'] = "Staff"
-        elif len(clean_parts) == 1:
-            extracted['Name'] = clean_parts[0]
+        if len(clean_parts) >= 3: extracted['Name'], extracted['Title'] = clean_parts[0], clean_parts[1]; 
+        elif len(clean_parts) == 2: extracted['Name'] = clean_parts[0]; extracted['Title'] = "Staff"
+        elif len(clean_parts) == 1: extracted['Name'] = clean_parts[0]
+        if not extracted.get('School') and len(clean_parts) >= 3: extracted['School'] = clean_parts[2]
+        elif not extracted.get('School') and len(clean_parts) == 2: extracted['School'] = clean_parts[1]
 
-        # Alias Correction
+        if extracted['Title'] and any(x in str(extracted['Title']) for x in ["University", "College", "Athletics"]):
+            if not extracted['School'] or extracted['School'] == "Unknown": extracted['School'] = extracted['Title']
+            extracted['Title'] = "Staff"
+
         raw_school = str(extracted['School']).strip()
         for alias, real_name in SCHOOL_ALIASES.items():
-            if alias.lower() in raw_school.lower():
-                extracted['School'] = real_name
-                break
-        
-        # Player Check
+            if alias.lower() in raw_school.lower(): extracted['School'] = real_name; break
         for val in [str(extracted['Title']), str(extracted['School'])]:
-            if "202" in val or "203" in val:
-                extracted['Role'] = "PLAYER"
-                extracted['Title'] = "Roster Member"
-                
+            if "202" in val or "203" in val: extracted['Role'] = "PLAYER"; extracted['Title'] = "Roster Member"
     return extracted
 
 def get_snippet(text, keyword):
     if pd.isna(text): return ""
     clean = str(text).replace('\n', ' ').replace('\r', ' ')
     m = re.search(re.escape(keyword), clean, re.IGNORECASE)
-    if m:
-        s, e = max(0, m.start()-60), min(len(clean), m.end()+60)
-        return f"...{clean[s:e].strip()}..."
+    if m: s, e = max(0, m.start()-60), min(len(clean), m.end()+60); return f"...{clean[s:e].strip()}..."
     return f"...{clean[:100]}..."
 
-# --- 4. SEARCH LOGIC ---
+# --- 5. SEARCH LOGIC ---
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     keywords_str = st.text_input("", placeholder="🔍 Search Database (e.g. Tallahassee, Quarterback)...")
     run_search = st.button("RUN SEARCH", use_container_width=True)
 
 if run_search or keywords_str:
-    if not keywords_str:
-        st.warning("⚠️ Please enter a keyword.")
+    if not keywords_str: st.warning("⚠️ Please enter a keyword.")
     else:
         keywords = [k.strip() for k in keywords_str.split(',') if k.strip()]
         chunk_files = glob.glob("chunk_*.csv")
-        
-        if not chunk_files:
-            st.error("❌ Critical Error: No database files found.")
+        if not chunk_files: st.error("❌ Critical Error: No database files found.")
         else:
             try: chunk_files.sort(key=lambda x: int(re.search(r'\d+', x).group()))
             except: pass
-            
             results = []
             progress_bar = st.progress(0)
-            
             for i, file in enumerate(chunk_files):
                 progress_bar.progress((i + 1) / len(chunk_files))
                 try:
@@ -392,79 +329,65 @@ if run_search or keywords_str:
                             elif c_clean.lower() == 'school': col_map[c_clean] = 'School'
                             elif c_clean.lower() == 'title': col_map[c_clean] = 'Title'
                         chunk.rename(columns=col_map, inplace=True)
-                        
                         if 'Full_Bio' not in chunk.columns: continue
-                        
                         mask = chunk['Full_Bio'].str.contains('|'.join(keywords), case=False, na=False)
                         if mask.any():
                             found = chunk[mask].copy()
-                            
                             def enrich_row(row):
+                                # 1. Strict Name/Junk Check
                                 meta = parse_header_smart(row['Full_Bio'])
-                                
                                 name = row.get('Name', '')
                                 if not name or name == "Unknown" or len(name) < 3: name = meta['Name'] or name
-                                
-                                # BAD NAME FILTER
                                 if any(bad.lower() in str(name).lower() for bad in BAD_NAMES): return None
                                 if len(str(name)) > 40: return None
-
-                                school = row.get('School', '')
-                                if not school or school == "Unknown": school = meta['School'] or school
-                                    
+                                
+                                # 2. Strict Poison Pill Check (Flag Football, Volleyball etc)
                                 title = row.get('Title', '')
                                 if not title or title == "Unknown": title = meta['Title'] or title
+                                school = row.get('School', '')
+                                if not school or school == "Unknown": school = meta['School'] or school
                                 
-                                role = meta['Role']
+                                full_check = (str(title) + " " + str(school) + " " + str(row['Full_Bio'])[:800]).lower()
+                                for poison in POISON_PILLS:
+                                    if poison.lower() in full_check: return None
 
-                                # SPORT SIPHON
+                                # 3. Sport Siphon
                                 detected_sport = detect_sport_context(row['Full_Bio'])
-                                if detected_sport != "Football" and detected_sport != "Uncertain":
-                                    return None 
+                                if detected_sport != "Football": return None 
 
-                                # PLAYER DETECTOR (Deep Context Check)
+                                role = meta['Role']
                                 if role == "COACH/STAFF":
                                     if detect_player_by_context(row['Full_Bio'], title):
-                                        role = "PLAYER"
-                                        title = "Roster Member"
-                                        # If Title was "Football", change to Roster Member
+                                        role = "PLAYER"; title = "Roster Member"
                                         if "football" in str(title).lower(): title = "Roster Member"
 
-                                # Title Scavenger
                                 if title == "Staff" or title == "Unknown":
                                     scavenged_title = extract_title_from_text(row['Full_Bio'])
                                     if scavenged_title != "Staff": title = scavenged_title
 
-                                # Matchmaking
                                 match = master_lookup.get((normalize_text(school), normalize_text(name)))
                                 if not match:
                                     cands = name_lookup.get(normalize_text(name), [])
-                                    if len(cands) == 1: 
-                                        match = cands[0]
+                                    if len(cands) == 1: match = cands[0]
                                     elif len(cands) > 1:
                                         ns = normalize_text(school)
                                         for c in cands:
-                                            if normalize_text(c['school']) in ns or ns in normalize_text(c['school']):
-                                                match = c; break
+                                            if normalize_text(c['school']) in ns or ns in normalize_text(c['school']): match = c; break
                                 
                                 email = row.get('Email', '')
                                 twitter = row.get('Twitter', '')
                                 sport_val = "Football"
-                                
                                 if match:
                                     if not email: email = match['email']
                                     if not twitter: twitter = match['twitter']
                                     if title in ["Staff", "Unknown", "Football"]: title = match['title']
                                     school = match['school']
-                                
                                 flat_bio = str(row['Full_Bio']).replace('\n', ' ').replace('\r', ' ').strip()
                                 flat_bio = re.sub(r'\s+', ' ', flat_bio)
-                                
                                 return pd.Series([role, name, title, school, sport_val, email, twitter, flat_bio])
 
                             enriched = found.apply(enrich_row, axis=1)
                             enriched.dropna(how='all', inplace=True)
-                            
                             if not enriched.empty:
                                 enriched.columns = ['Role', 'Name', 'Title', 'School', 'Sport', 'Email', 'Twitter', 'Full_Bio']
                                 enriched['Context_Snippet'] = enriched['Full_Bio'].apply(lambda x: get_snippet(x, keywords[0]))
@@ -473,15 +396,16 @@ if run_search or keywords_str:
                 except: continue
 
             progress_bar.empty()
-
             if results:
                 final_df = pd.concat(results)
                 final_df = final_df[~final_df['Name'].str.contains("Skip To|Official|Javascript", case=False, na=False)]
                 final_df.dropna(subset=['Name'], inplace=True)
                 
+                # Deduplication Step
+                final_df.drop_duplicates(subset=['Name', 'School'], inplace=True)
+
                 final_df['Role_Sort'] = final_df['Role'].apply(lambda x: 1 if "PLAYER" in str(x).upper() else 0)
                 final_df.sort_values(by=['Role_Sort', 'School', 'Name'], ascending=[True, True, True], inplace=True)
-                
                 cols = ['Role', 'Name', 'Title', 'School', 'Sport', 'Email', 'Twitter', 'Context_Snippet', 'Full_Bio']
                 final_df = final_df[cols]
                 
@@ -491,7 +415,6 @@ if run_search or keywords_str:
                 safe_kw = keywords[0].replace(' ', '_')
                 date_str = datetime.now().strftime("%Y-%m-%d")
                 file_name = f"{safe_kw}_{date_str}.xlsx"
-
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     final_df.to_excel(writer, index=False, sheet_name="Results")
@@ -499,7 +422,5 @@ if run_search or keywords_str:
                     worksheet = writer.sheets["Results"]
                     cell_format = workbook.add_format({'text_wrap': False, 'valign': 'top'})
                     worksheet.set_column('A:I', 25, cell_format)
-                    
                 st.download_button("💾 DOWNLOAD RESULTS (EXCEL)", buffer.getvalue(), file_name, "application/vnd.ms-excel", type="primary")
-            else:
-                st.warning("No matches found.")
+            else: st.warning("No matches found.")
