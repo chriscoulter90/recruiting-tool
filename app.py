@@ -9,17 +9,12 @@ import requests
 
 # 1. LIGHTWEIGHT STARTUP
 st.set_page_config(page_title="Recruiting Search", layout="wide")
-st.title("🏈 Recruiting Tool - Pro Mode")
+st.title("🏈 Recruiting Tool - Deep Extraction Mode")
 st.write("### ✅ System Status: ONLINE")
 
-# 2. CONSTANTS & CLEANING LISTS (The "Brains" of the operation)
+# 2. CONSTANTS
 MASTER_DB_FILE = 'REC_CONS_MASTER.csv' 
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
-
-GARBAGE_NAMES = ["Skip To", "Main Content", "Print=True", "Schedule", "2024", "2025", "Ticket Office", "Roster", "Staff Directory"]
-BAD_NAME_INDICATORS = ["University", "Bio", "Stats", "Roster", "Team", "Football", "Player", "Coach", "Staff", "View Full", "Profile"]
-SCHOOL_CORRECTIONS = {"Boston": "Boston College", "Miami": "Miami (FL)", "Ole": "Ole Miss"}
-TITLE_MAP = {"LB": "Linebackers", "DB": "Defensive Backs", "WR": "Wide Receivers", "QB": "Quarterbacks", "RB": "Running Backs", "DL": "Defensive Line", "OL": "Offensive Line", "TE": "Tight Ends", "HC": "Head Coach"}
 
 # 3. VERIFY FILES
 chunk_files = glob.glob("chunk_*.csv")
@@ -27,7 +22,7 @@ if not chunk_files:
     st.error("❌ No chunk files found.")
     st.stop()
 else:
-    st.info(f"📂 Detected {len(chunk_files)} database chunks ready for scanning.")
+    st.info(f"📂 Ready to scan {len(chunk_files)} database chunks.")
 
 # 4. LAZY LOAD BUTTON
 if "engine_loaded" not in st.session_state:
@@ -38,11 +33,11 @@ if not st.session_state["engine_loaded"]:
         st.session_state["engine_loaded"] = True
         st.rerun()
 
-# 5. HEAVY LOGIC (Only runs after activation)
+# 5. SEARCH ENGINE LOGIC
 if st.session_state["engine_loaded"]:
     import pandas as pd
     
-    # --- HELPER FUNCTIONS ---
+    # --- HELPER: MASTER DB LOOKUP ---
     @st.cache_data
     def load_master_lookup():
         try:
@@ -77,6 +72,40 @@ if st.session_state["engine_loaded"]:
             return lookup, name_lookup
         except: return {}, {}
 
+    # --- HELPER: DEEP NAME EXTRACTOR ---
+    def extract_identity_from_bio(bio):
+        """
+        Extracts Name from the 'SOURCE:' URL found in the bio.
+        """
+        extracted_name = None
+        extracted_role = "COACH/STAFF"
+        
+        # 1. Find URL in bio
+        url_match = re.search(r"SOURCE: (https?://[^\s]+)", str(bio))
+        if url_match:
+            url = url_match.group(1)
+            # Remove trailing extracted numbers/garbage
+            clean_url = url.split('?')[0].rstrip('/')
+            parts = clean_url.split('/')
+            
+            # The name is usually the last part (e.g. /staff/bryan-harmon)
+            # OR the second to last if there is an ID (e.g. /roster/joe-smith/1234)
+            slug = parts[-1]
+            if slug.isdigit() or len(slug) < 3:
+                slug = parts[-2]
+            
+            if '-' in slug:
+                # Remove digits (e.g. joe-smith-2)
+                slug = re.sub(r'\d+', '', slug).strip('-')
+                extracted_name = slug.replace('-', ' ').title()
+
+        # 2. Guess Role from Bio text
+        bio_lower = str(bio).lower()
+        if "roster" in bio_lower or "player" in bio_lower or re.search(r"\b202[0-9]\b", bio_lower):
+            extracted_role = "PLAYER"
+            
+        return extracted_name, extracted_role
+
     def get_snippet(text, keyword):
         if pd.isna(text): return ""
         clean = str(text).replace('\n', ' ').replace('\r', ' ')
@@ -86,45 +115,9 @@ if st.session_state["engine_loaded"]:
             return f"...{clean[s:e].strip()}..."
         return f"...{clean[:100]}..."
 
-    def clean_row_logic(row):
-        # Basic cleanup
-        name = str(row.get('Name', '')).strip()
-        title = str(row.get('Title', '')).strip()
-        school = str(row.get('School', '')).strip()
-        bio = str(row.get('Full_Bio', '')).strip()
-
-        # 1. Garbage Collection
-        if name.isdigit() or any(g in name for g in GARBAGE_NAMES):
-            row['Name'] = "DELETE_ME"; return row
-
-        # 2. Bio Cleanup (Remove headers)
-        for split in ["Skip To Main Content", "Navigation Menu", "Composite"]:
-             parts = re.split(re.escape(split), bio, flags=re.IGNORECASE)
-             if len(parts) > 1: bio = parts[0]; row['Full_Bio'] = bio
-
-        # 3. Name Rescue (If Name is "Unknown" or junk, try to find it in Bio)
-        if name == "Unknown" or any(b in name for b in BAD_NAME_INDICATORS):
-            # Try to find "First Last" at start of bio
-            match = re.search(r"^([A-Z][a-z]+ [A-Z][a-z]+)", bio[:50])
-            if match: name = match.group(1)
-        
-        # 4. Title Cleanup
-        words = title.split()
-        new_words = [TITLE_MAP.get(w.upper(), w) for w in words]
-        title = " ".join(new_words)
-        
-        # 5. Role Determination
-        role = "COACH/STAFF"
-        if "Roster" in title or "Player" in title or re.search(r"Position:", bio): role = "PLAYER"
-        
-        row['Name'] = name
-        row['Title'] = title
-        row['Role'] = role
-        return row
-
     # --- MAIN SEARCH UI ---
     master_lookup, name_lookup = load_master_lookup()
-    st.success("✅ Search Engine Active & Logic Loaded")
+    st.success("✅ Smart Extractor Loaded")
     
     keywords_str = st.text_input("Enter Keywords (comma separated):", placeholder="e.g. tallahassee, atlanta")
     
@@ -150,9 +143,8 @@ if st.session_state["engine_loaded"]:
                     df_iter = pd.read_csv(file, chunksize=500, on_bad_lines='skip') 
                     
                     for chunk in df_iter:
-                        chunk.columns = [c.strip() for c in chunk.columns]
-                        
                         # Fix Columns
+                        chunk.columns = [c.strip() for c in chunk.columns]
                         for c in chunk.columns:
                             if c.lower() in ['bio', 'full_bio', 'description', 'full bio']: 
                                 chunk.rename(columns={c: 'Full_Bio'}, inplace=True)
@@ -161,6 +153,8 @@ if st.session_state["engine_loaded"]:
                             if c.lower() == 'title': chunk.rename(columns={c: 'Title'}, inplace=True)
                         
                         if 'Full_Bio' not in chunk.columns: continue
+                        
+                        # Ensure columns exist
                         if 'Name' not in chunk.columns: chunk['Name'] = "Unknown"
                         if 'School' not in chunk.columns: chunk['School'] = "Unknown"
                         if 'Title' not in chunk.columns: chunk['Title'] = "Unknown"
@@ -170,29 +164,52 @@ if st.session_state["engine_loaded"]:
                         if mask.any():
                             found = chunk[mask].copy()
                             
-                            # CLEANING & ENRICHMENT
-                            found = found.apply(clean_row_logic, axis=1)
-                            found = found[found['Name'] != "DELETE_ME"]
+                            # --- DEEP EXTRACTION LOGIC ---
+                            def repair_row(row):
+                                # 1. Extract Name from URL if missing
+                                if row['Name'] in ["Unknown", "", "nan"] or len(str(row['Name'])) < 3:
+                                    ex_name, ex_role = extract_identity_from_bio(row['Full_Bio'])
+                                    if ex_name:
+                                        row['Name'] = ex_name
+                                        row['Role'] = ex_role
+                                
+                                # 2. Master DB Lookup to fill blanks
+                                def n(t): return re.sub(r'[^a-z0-9]', '', str(t).lower())
+                                
+                                s_norm = n(row['School'])
+                                n_norm = n(row['Name'])
+                                
+                                match = master_lookup.get((s_norm, n_norm))
+                                
+                                # If no match, try fuzzy name match
+                                if not match:
+                                    candidates = name_lookup.get(n_norm, [])
+                                    # Try to find a school match in the bio text
+                                    bio_lower = str(row['Full_Bio']).lower()
+                                    for cand in candidates:
+                                        cand_school_norm = n(cand['school'])
+                                        # If candidate school is in the bio, assume it's them
+                                        if cand_school_norm and cand_school_norm in bio_lower:
+                                            match = cand
+                                            break
+                                
+                                if match:
+                                    row['School'] = match['school']
+                                    row['Title'] = match['title']
+                                    row['Email'] = match['email']
+                                    row['Twitter'] = match['twitter']
+                                    row['Role'] = "COACH/STAFF"
+                                
+                                return row
+
+                            found['Role'] = "COACH/STAFF" # Default
+                            found['Email'] = ""
+                            found['Twitter'] = ""
+                            
+                            found = found.apply(repair_row, axis=1)
                             found['Context_Snippet'] = found['Full_Bio'].apply(lambda x: get_snippet(x, keywords[0]))
                             
-                            def enrich(row):
-                                def n(t): return re.sub(r'[^a-z0-9]', '', str(t).lower())
-                                s, nm = n(row['School']), n(row['Name'])
-                                match = master_lookup.get((s, nm))
-                                if not match:
-                                    pots = name_lookup.get(nm, [])
-                                    for p in pots:
-                                        if s in n(p['school']): match = p; break
-                                if match:
-                                    if not row.get('Email'): row['Email'] = match['email']
-                                    if not row.get('Twitter'): row['Twitter'] = match['twitter']
-                                return row
-                            
-                            if not found.empty:
-                                if 'Email' not in found.columns: found['Email'] = ""
-                                if 'Twitter' not in found.columns: found['Twitter'] = ""
-                                found = found.apply(enrich, axis=1)
-                                results.append(found)
+                            results.append(found)
                         
                         del chunk
                     gc.collect()
@@ -205,7 +222,8 @@ if st.session_state["engine_loaded"]:
 
             if results:
                 final_df = pd.concat(results)
-                # Final Clean Layout
+                
+                # Filter final columns
                 cols = ['Role', 'Name', 'Title', 'School', 'Email', 'Twitter', 'Context_Snippet', 'Full_Bio']
                 final_cols = [c for c in cols if c in final_df.columns]
                 final_df = final_df[final_cols]
