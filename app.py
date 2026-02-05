@@ -7,13 +7,13 @@ import io
 import requests
 import pandas as pd
 from datetime import datetime
+from collections import Counter
 
 # --- 1. UI CONFIGURATION ---
 st.set_page_config(page_title="Coulter Recruiting", page_icon="🏈", layout="wide")
 
 st.markdown("""
     <style>
-    /* Global Font */
     html, body, [class*="css"] {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         background-color: #F5F5F7; 
@@ -23,7 +23,6 @@ st.markdown("""
     footer {visibility: hidden;}
     .block-container {padding-top: 2rem;}
 
-    /* HEADER */
     .header-container {
         background: linear-gradient(90deg, #002B5C 0%, #003B7E 100%);
         padding: 40px;
@@ -36,7 +35,6 @@ st.markdown("""
     .main-title { font-size: 3rem; font-weight: 800; color: #FFFFFF; margin: 0; letter-spacing: -1px; }
     .sub-title { font-size: 1.2rem; font-weight: 400; color: #A3C9F7; margin-top: 5px; text-transform: uppercase; letter-spacing: 2px; }
 
-    /* INPUT & BUTTONS */
     .stTextInput > div > div > input {
         border-radius: 12px; border: 1px solid #D1D1D6; padding: 15px 20px; font-size: 18px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);
     }
@@ -58,13 +56,23 @@ st.markdown("""
 MASTER_DB_FILE = 'REC_CONS_MASTER.csv' 
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
-FORBIDDEN_SPORTS = [
-    "Volleyball", "Baseball", "Softball", "Soccer", "Tennis", "Golf", 
-    "Swimming", "Lacrosse", "Hockey", "Wrestling", "Gymnastics", 
-    "Basketball", "Track & Field", "Crew", "Rowing", "Sailing", 
-    "Acrobatics", "Tumbling", "Cheerleading", "Fencing", "Spirit Squad",
-    "Women's Basketball", "Men's Basketball"
+# A. KEYWORDS FOR CONTEXT SCANNING
+FOOTBALL_INDICATORS = [
+    "football", "quarterback", "linebacker", "touchdown", "nfl", "bowl", 
+    "offensive", "defensive", "special teams", "recruiting", "fbs", "fcs",
+    "interception", "tackle", "gridiron", "playoff", "super bowl", "pro bowl"
 ]
+
+NON_FOOTBALL_INDICATORS = {
+    "Volleyball": ["volleyball", "set", "spike", "libero", "dig", "kill", "block"],
+    "Baseball": ["baseball", "inning", "homerun", "pitcher", "dugout", "mlb", "batting"],
+    "Basketball": ["basketball", "nba", "dunk", "rebound", "three-pointer", "court"],
+    "Soccer": ["soccer", "goal", "midfielder", "striker", "goalkeeper", "fifa"],
+    "Softball": ["softball", "pitcher", "inning"],
+    "Track": ["track", "sprint", "hurdle", "relay", "marathon"],
+    "Swimming": ["swim", "dive", "freestyle", "breaststroke", "pool"],
+    "Lacrosse": ["lacrosse", "stick", "goalie", "crease"]
+}
 
 GARBAGE_PHRASES = [
     "Official Athletics Website", "Official Website", "Composite", 
@@ -72,75 +80,49 @@ GARBAGE_PHRASES = [
     "View Full Profile", "Related Headlines", "Source:", "https://"
 ]
 
-# --- 3. THE BRAIN: DOMAIN & ALIAS MAPPING ---
-# This uses the URL to identify the school safely.
+# STRICT JUNK NAME FILTER
+BAD_NAMES = [
+    "Football Roster", "Football Schedule", "Men's Basketball", "Women's Basketball", 
+    "Composite Schedule", "Game Recap", "Box Score", "Statistic", "Menu", "Search",
+    "Tickets", "Donate", "Camps", "Facilities", "Staff Directory", "2024", "2025", "2026"
+]
+
+# TITLE SCAVENGER LIST (Priority Order)
+JOB_TITLES = [
+    "Head Coach", "Defensive Coordinator", "Offensive Coordinator", "Special Teams Coordinator",
+    "Recruiting Coordinator", "Director of Player Personnel", "Director of Football Operations",
+    "General Manager", "Assistant Coach", "Associate Head Coach", "Run Game Coordinator", "Pass Game Coordinator",
+    "Quarterbacks Coach", "Linebackers Coach", "Wide Receivers Coach", "Offensive Line Coach",
+    "Defensive Line Coach", "Cornerbacks Coach", "Safeties Coach", "Tight Ends Coach", "Running Backs Coach",
+    "Graduate Assistant", "Analyst", "Quality Control", "Director of Scouting"
+]
+
+# DOMAIN & ALIAS MAPPING
 DOMAIN_MAP = {
-    "thesundevils.com": "Arizona State",
-    "rolltide.com": "Alabama",
-    "auburntigers.com": "Auburn",
-    "uclabruins.com": "UCLA",
-    "usctrojans.com": "USC",
-    "seminoles.com": "Florida State",
-    "gatorssports.com": "Florida",
-    "floridagators.com": "Florida",
-    "georgiadogs.com": "Georgia",
-    "lsusports.net": "LSU",
-    "olemisssports.com": "Ole Miss",
-    "hailstate.com": "Mississippi State",
-    "mutigers.com": "Missouri",
-    "gamecocksonline.com": "South Carolina",
-    "utsports.com": "Tennessee",
-    "12thman.com": "Texas A&M",
-    "arkansasrazorbacks.com": "Arkansas",
-    "ukathletics.com": "Kentucky",
-    "vucommodores.com": "Vanderbilt",
-    "ohiostatebuckeyes.com": "Ohio State",
-    "mgoblue.com": "Michigan",
-    "gopsusports.com": "Penn State",
-    "uwbadgers.com": "Wisconsin",
-    "huskers.com": "Nebraska",
-    "hawkeyesports.com": "Iowa",
-    "msuspartans.com": "Michigan State",
-    "gophersports.com": "Minnesota",
-    "fightingillini.com": "Illinois",
-    "purduesports.com": "Purdue",
-    "iuhoosiers.com": "Indiana",
-    "scarletknights.com": "Rutgers",
-    "umterps.com": "Maryland",
-    "virginiasports.com": "Virginia",
-    "hokieSports.com": "Virginia Tech",
-    "theacc.com": "ACC",
-    "clemsontigers.com": "Clemson",
-    "gopack.com": "NC State",
-    "bceagles.com": "Boston College",
-    "cuse.com": "Syracuse",
-    "godeacs.com": "Wake Forest",
-    "ramblinwreck.com": "Georgia Tech",
-    "pittsburghpanthers.com": "Pittsburgh",
-    "gostanford.com": "Stanford",
-    "calbears.com": "California",
-    "goducks.com": "Oregon",
-    "gohuskies.com": "Washington",
-    "cubuffs.com": "Colorado",
-    "utahutes.com": "Utah",
-    "arizonawildcats.com": "Arizona",
-    "texassports.com": "Texas",
-    "soonersports.com": "Oklahoma",
-    "gofrogs.com": "TCU",
-    "baylorbears.com": "Baylor",
-    "texastech.com": "Texas Tech",
-    "kuathletics.com": "Kansas",
-    "kstatesports.com": "Kansas State",
-    "okstate.com": "Oklahoma State",
-    "cyclones.com": "Iowa State",
-    "wvusports.com": "West Virginia",
-    "ucfknights.com": "UCF",
-    "gobearcats.com": "Cincinnati",
-    "uhcougars.com": "Houston",
-    "byucougars.com": "BYU"
+    "thesundevils.com": "Arizona State", "rolltide.com": "Alabama", "auburntigers.com": "Auburn",
+    "uclabruins.com": "UCLA", "usctrojans.com": "USC", "seminoles.com": "Florida State",
+    "gatorssports.com": "Florida", "floridagators.com": "Florida", "georgiadogs.com": "Georgia",
+    "lsusports.net": "LSU", "olemisssports.com": "Ole Miss", "hailstate.com": "Mississippi State",
+    "mutigers.com": "Missouri", "gamecocksonline.com": "South Carolina", "utsports.com": "Tennessee",
+    "12thman.com": "Texas A&M", "arkansasrazorbacks.com": "Arkansas", "ukathletics.com": "Kentucky",
+    "vucommodores.com": "Vanderbilt", "ohiostatebuckeyes.com": "Ohio State", "mgoblue.com": "Michigan",
+    "gopsusports.com": "Penn State", "uwbadgers.com": "Wisconsin", "huskers.com": "Nebraska",
+    "hawkeyesports.com": "Iowa", "msuspartans.com": "Michigan State", "gophersports.com": "Minnesota",
+    "fightingillini.com": "Illinois", "purduesports.com": "Purdue", "iuhoosiers.com": "Indiana",
+    "scarletknights.com": "Rutgers", "umterps.com": "Maryland", "virginiasports.com": "Virginia",
+    "hokieSports.com": "Virginia Tech", "theacc.com": "ACC", "clemsontigers.com": "Clemson",
+    "gopack.com": "NC State", "bceagles.com": "Boston College", "cuse.com": "Syracuse",
+    "godeacs.com": "Wake Forest", "ramblinwreck.com": "Georgia Tech", "pittsburghpanthers.com": "Pittsburgh",
+    "gostanford.com": "Stanford", "calbears.com": "California", "goducks.com": "Oregon",
+    "gohuskies.com": "Washington", "cubuffs.com": "Colorado", "utahutes.com": "Utah",
+    "arizonawildcats.com": "Arizona", "texassports.com": "Texas", "soonersports.com": "Oklahoma",
+    "gofrogs.com": "TCU", "baylorbears.com": "Baylor", "texastech.com": "Texas Tech",
+    "kuathletics.com": "Kansas", "kstatesports.com": "Kansas State", "okstate.com": "Oklahoma State",
+    "cyclones.com": "Iowa State", "wvusports.com": "West Virginia", "ucfknights.com": "UCF",
+    "gobearcats.com": "Cincinnati", "uhcougars.com": "Houston", "byucougars.com": "BYU",
+    "bamastatesports.com": "Alabama State", "famuathletics.com": "Florida A&M", "bcwildcats.com": "Bethune-Cookman"
 }
 
-# Aliases to translate messy header text to Canonical School Names
 SCHOOL_ALIASES = {
     "ASU": "Arizona State", "Arizona State University": "Arizona State", "Sun Devils": "Arizona State",
     "UCF": "Central Florida", "Central Florida": "UCF", "Knights": "Central Florida",
@@ -163,7 +145,6 @@ SCHOOL_ALIASES = {
 def normalize_text(text):
     if pd.isna(text): return ""
     text = str(text).lower()
-    # Aggressive cleaning for matching
     for word in ['university', 'univ', 'college', 'state', 'the', 'of', 'athletics', 'inst']:
         text = text.replace(word, '')
     return re.sub(r'[^a-z0-9]', '', text).strip()
@@ -194,17 +175,12 @@ def load_lookup():
                     'email': str(row.get(email_col, '')).strip() if email_col else "",
                     'twitter': str(row.get(twitter_col, '')).strip() if twitter_col else "",
                     'title': str(row.get(title_col, '')).strip() if title_col else "",
-                    'school': s_raw # Preserve original casing
+                    'school': s_raw 
                 }
-                # 1. Standard Lookup
                 lookup[(s_key, n_key)] = rec
-                
-                # 2. Add Alias Lookups (e.g. Map 'ASU' keys to this record)
                 for alias, real_name in SCHOOL_ALIASES.items():
                     if s_raw == real_name:
                          lookup[(normalize_text(alias), n_key)] = rec
-                
-                # 3. Name Only Lookup (For the "Gap Filling" safety net)
                 if n_key not in name_lookup: name_lookup[n_key] = []
                 name_lookup[n_key].append(rec)
                 
@@ -216,30 +192,67 @@ if "master_data" not in st.session_state:
 master_lookup, name_lookup = st.session_state["master_data"]
 
 def detect_school_from_url(bio_text):
-    """
-    Scans the SOURCE: URL at the top of the bio to fingerprint the school.
-    """
     match = re.search(r"SOURCE: https?://(www\.)?([a-zA-Z0-9.-]+)", str(bio_text))
     if match:
         domain = match.group(2).lower()
-        # Direct Map
-        if domain in DOMAIN_MAP:
-            return DOMAIN_MAP[domain]
-        # Partial Map (e.g. 'subdomain.rolltide.com')
+        if domain in DOMAIN_MAP: return DOMAIN_MAP[domain]
         for key, school in DOMAIN_MAP.items():
-            if key in domain:
-                return school
+            if key in domain: return school
     return None
+
+def detect_sport_context(bio):
+    if pd.isna(bio): return "Uncertain"
+    text = str(bio)
+    analysis_text = text[200:].lower() if len(text) > 500 else text.lower()
+
+    fb_score = sum(analysis_text.count(w) for w in FOOTBALL_INDICATORS)
+    max_other_score = 0
+    likely_other_sport = None
+    
+    for sport, keywords in NON_FOOTBALL_INDICATORS.items():
+        score = sum(analysis_text.count(w) for w in keywords)
+        if score > max_other_score:
+            max_other_score = score
+            likely_other_sport = sport
+
+    if fb_score >= max_other_score: return "Football"
+    elif max_other_score > fb_score and max_other_score > 2: return likely_other_sport
+    else: return "Football" if "football" in text[:300].lower() else "Uncertain"
+
+def detect_player_by_context(bio):
+    """
+    Checks bio for player indicators (height, weight, class year) to prevent
+    players from being mislabeled as staff.
+    """
+    text = str(bio).lower()[:600]
+    
+    # 1. Class Year Indicators
+    if any(x in text for x in ["freshman", "sophomore", "junior", "senior", "redshirt", "class of 20"]):
+        return True
+    
+    # 2. Physical Stats (e.g. 6-2, 200 lbs)
+    if re.search(r"\d['’]-?\d+\"?\s+\d{2,3}\s?lbs", text):
+        return True
+        
+    # 3. Position Abbreviations (QB, WR, LB, etc) followed by height/weight
+    if re.search(r"\b(qb|wr|rb|te|ol|dl|lb|db|saf|cb|pk|p|ls)\b", text) and "lbs" in text:
+        return True
+        
+    return False
+
+def extract_title_from_text(bio):
+    bio_intro = str(bio)[:500] 
+    for title in JOB_TITLES:
+        if re.search(r"\b" + re.escape(title) + r"\b", bio_intro, re.IGNORECASE):
+            return title
+    return "Staff"
 
 def parse_header_smart(bio):
     extracted = {'Name': None, 'Title': None, 'School': None, 'Role': 'COACH/STAFF'}
     
-    # 1. URL Fingerprint (Highest Priority for School)
     url_school = detect_school_from_url(bio)
-    if url_school:
-        extracted['School'] = url_school
+    if url_school: extracted['School'] = url_school
 
-    # 2. Text Parsing
     clean_text = str(bio).replace('\r', '\n').replace('–', '-').replace('—', '-')
     lines = [L.strip() for L in clean_text.split('\n') if L.strip()]
     
@@ -253,7 +266,6 @@ def parse_header_smart(bio):
         parts = [p.strip() for p in header.split(' - ')]
         clean_parts = [p for p in parts if not any(g.lower() in p.lower() for g in GARBAGE_PHRASES)]
         
-        # Parse logic
         if len(clean_parts) >= 3:
             extracted['Name'], extracted['Title'] = clean_parts[0], clean_parts[1]
             if not extracted['School']: extracted['School'] = clean_parts[2]
@@ -264,13 +276,7 @@ def parse_header_smart(bio):
         elif len(clean_parts) == 1:
             extracted['Name'] = clean_parts[0]
 
-        # Cleanup
-        if extracted['Title'] and any(x in str(extracted['Title']) for x in ["University", "College", "Athletics"]):
-            if not extracted['School'] or extracted['School'] == "Unknown":
-                extracted['School'] = extracted['Title']
-            extracted['Title'] = "Staff"
-
-        # Apply Aliases to Text-Found School (if URL didn't catch it)
+        # Alias Correction
         raw_school = str(extracted['School']).strip()
         for alias, real_name in SCHOOL_ALIASES.items():
             if alias.lower() in raw_school.lower():
@@ -282,7 +288,7 @@ def parse_header_smart(bio):
             if "202" in val or "203" in val:
                 extracted['Role'] = "PLAYER"
                 extracted['Title'] = "Roster Member"
-    
+                
     return extracted
 
 def get_snippet(text, keyword):
@@ -338,12 +344,15 @@ if run_search or keywords_str:
                             found = chunk[mask].copy()
                             
                             def enrich_row(row):
-                                # 1. Smart Parse (URL + Header)
+                                # 1. Parse Header
                                 meta = parse_header_smart(row['Full_Bio'])
-                                
                                 name = row.get('Name', '')
                                 if not name or name == "Unknown" or len(name) < 3: name = meta['Name'] or name
                                 
+                                # 2. JUNK FILTER (Fix for "Roster" names)
+                                if any(bad.lower() in str(name).lower() for bad in BAD_NAMES): return None
+                                if len(str(name)) > 40 or len(str(name)) < 3: return None
+
                                 school = row.get('School', '')
                                 if not school or school == "Unknown": school = meta['School'] or school
                                     
@@ -352,26 +361,31 @@ if run_search or keywords_str:
                                 
                                 role = meta['Role']
 
-                                # 2. Forbidden Sports Filter
-                                blob = (str(title) + " " + str(school) + " " + str(row['Full_Bio'])[:300]).lower()
-                                for sport in FORBIDDEN_SPORTS:
-                                    if sport.lower() in blob and "football" not in blob: return None
+                                # 3. Player Detector (Fix for Alabama Players)
+                                if role == "COACH/STAFF":
+                                    if detect_player_by_context(row['Full_Bio']):
+                                        role = "PLAYER"
+                                        title = "Roster Member"
 
-                                # 3. MATCHMAKING
-                                # Step A: Strict Match (School + Name)
+                                # 4. Sport Siphon
+                                detected_sport = detect_sport_context(row['Full_Bio'])
+                                if detected_sport != "Football" and detected_sport != "Uncertain":
+                                    return None 
+
+                                # 5. Title Scavenger
+                                if title == "Staff" or title == "Unknown":
+                                    scavenged_title = extract_title_from_text(row['Full_Bio'])
+                                    if scavenged_title != "Staff": title = scavenged_title
+
+                                # 6. Matchmaking
                                 match = master_lookup.get((normalize_text(school), normalize_text(name)))
-                                
-                                # Step B: "Gap Filling" Match (Name Only + Vague School)
                                 if not match:
                                     cands = name_lookup.get(normalize_text(name), [])
-                                    # If unique name, FORCE MATCH (Trusts Master DB over scrape)
                                     if len(cands) == 1: 
                                         match = cands[0]
                                     elif len(cands) > 1:
-                                        # If multiple people, check if schools share keywords
                                         ns = normalize_text(school)
                                         for c in cands:
-                                            # "Arizona State" in "ASU Sun Devils" (via alias normalization)
                                             if normalize_text(c['school']) in ns or ns in normalize_text(c['school']):
                                                 match = c; break
                                 
@@ -382,9 +396,8 @@ if run_search or keywords_str:
                                 if match:
                                     if not email: email = match['email']
                                     if not twitter: twitter = match['twitter']
-                                    # Fill Gaps
                                     if title in ["Staff", "Unknown", "Football"]: title = match['title']
-                                    school = match['school'] # Use Clean School Name
+                                    school = match['school']
                                 
                                 flat_bio = str(row['Full_Bio']).replace('\n', ' ').replace('\r', ' ').strip()
                                 flat_bio = re.sub(r'\s+', ' ', flat_bio)
