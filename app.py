@@ -118,7 +118,7 @@ def load_lookup():
             last = get_val(row, 'last name', 'last')
             email = get_val(row, 'email', 'email address')
             
-            # --- UPDATED: SPECIFICALLY LOOKING FOR "Individual's Twitter" ---
+            # --- SPECIFICALLY LOOKING FOR "Individual's Twitter" ---
             twitter = get_val(row, "individual's twitter", 'twitter', 'x', 'twitter handle')
             
             title = get_val(row, 'title')
@@ -164,12 +164,13 @@ def parse_header(bio):
     return extracted
 
 def get_snippet(text, keyword):
-    m = re.search(re.escape(keyword), str(text), re.IGNORECASE)
+    # Flatten text to avoid massive rows
+    clean_text = str(text).replace(chr(10), ' ').replace(chr(13), ' ')
+    m = re.search(re.escape(keyword), clean_text, re.IGNORECASE)
     if m: 
-        s, e = max(0, m.start()-50), min(len(text), m.end()+50)
-        raw = text[s:e]
-        return f"...{raw.replace(chr(10), ' ').replace(chr(13), ' ')}..."
-    return text[:100].replace(chr(10), ' ').replace(chr(13), ' ') + "..."
+        s, e = max(0, m.start()-50), min(len(clean_text), m.end()+50)
+        return f"...{clean_text[s:e]}..."
+    return clean_text[:100] + "..."
 
 # --- 4. SEARCH LOGIC ---
 col1, col2, col3 = st.columns([1, 2, 1])
@@ -226,7 +227,7 @@ if submit_button and keywords_str:
                             'Email': match.get('email', ''),
                             'Twitter': match.get('twitter', ''),
                             'Context': get_snippet(row['Full_Bio'], keywords[0]),
-                            'Full_Bio': row['Full_Bio'] # Kept for export, hidden in UI
+                            'Full_Bio': row['Full_Bio'] # Kept for export
                         })
                 
                 del df_chunk
@@ -238,7 +239,14 @@ if submit_button and keywords_str:
 
         if results_found:
             df_res = pd.DataFrame(results_found).drop_duplicates(subset=['Name', 'School'])
+            
+            # --- FLATTEN FULL BIO FOR EXPORT ---
+            # This line removes all Enter keys so rows stay short in Excel
+            df_res['Full_Bio'] = df_res['Full_Bio'].astype(str).str.replace(r'[\r\n]+', ' ', regex=True)
+            
+            # Sort by Role then Name
             df_res.sort_values(by=['Role', 'Name'], ascending=[True, True], inplace=True)
+            
             st.session_state['search_results'] = df_res
         else:
             st.session_state['search_results'] = pd.DataFrame()
@@ -260,7 +268,7 @@ if not st.session_state['search_results'].empty:
         hide_index=True
     )
     
-    # Download Button (WITH Full_Bio)
+    # Download Button
     safe_kw = re.sub(r'[^a-zA-Z0-9]', '_', st.session_state['last_keywords'][:20])
     file_name_dynamic = f"Search_{safe_kw}_{datetime.now().date()}.xlsx"
     
