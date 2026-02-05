@@ -6,7 +6,7 @@ import os
 import re
 from datetime import datetime
 
-# --- PAGE CONFIGURATION (Must be first) ---
+# --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Recruiting Search Pro", page_icon="🏈", layout="wide")
 
 # --- CONFIGURATION ---
@@ -130,11 +130,45 @@ def load_data():
 
     # 2. Load Main Database (The 57k list)
     try:
+        # Try UTF-8 first
         df = pd.read_csv(DB_FILE, encoding='utf-8').fillna("")
     except UnicodeDecodeError:
+        # Fallback to Latin1
         df = pd.read_csv(DB_FILE, encoding='latin1').fillna("")
     except FileNotFoundError:
+        st.error(f"File not found: {DB_FILE}. Please ensure it is in your GitHub repository.")
         return None, None, None
+
+    # --- ROBUST COLUMN FIX ---
+    # Strip whitespace from column names
+    df.columns = [c.strip() for c in df.columns]
+    
+    # Check if 'Full_Bio' exists. If not, look for common alternatives.
+    if 'Full_Bio' not in df.columns:
+        possible_cols = ['Bio', 'bio', 'Full Bio', 'Description', 'About', 'Text', 'body', 'Profile']
+        found = False
+        for c in possible_cols:
+            if c in df.columns:
+                df.rename(columns={c: 'Full_Bio'}, inplace=True)
+                found = True
+                break
+        
+        if not found:
+            # Check for delimiter issue (e.g. everything in one column)
+            if len(df.columns) < 2:
+                 st.error(f"Error: The database file seems to be formatted incorrectly (only 1 column detected). It might be using a different separator (like a semicolon).")
+                 st.write("First few rows detected:", df.head())
+                 st.stop()
+            
+            st.error(f"CRITICAL ERROR: Could not find a 'Full_Bio' (or 'Bio') column in {DB_FILE}.")
+            st.write("These are the columns found in your file:", df.columns.tolist())
+            st.stop()
+
+    # Also check for 'Name' and 'School'
+    if 'Name' not in df.columns:
+        if 'name' in df.columns: df.rename(columns={'name': 'Name'}, inplace=True)
+    if 'School' not in df.columns:
+        if 'school' in df.columns: df.rename(columns={'school': 'School'}, inplace=True)
 
     return df, lookup, name_lookup
 
