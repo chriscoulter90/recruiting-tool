@@ -82,7 +82,6 @@ st.markdown("""
 MASTER_DB_FILE = 'REC_CONS_MASTER.csv' 
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
-# KEYWORDS
 FOOTBALL_INDICATORS = [
     "football", "quarterback", "linebacker", "touchdown", "nfl", "bowl", 
     "offensive", "defensive", "special teams", "recruiting", "fbs", "fcs",
@@ -106,18 +105,19 @@ GARBAGE_PHRASES = [
     "View Full Profile", "Related Headlines", "Source:", "https://"
 ]
 
-# NUCLEAR POISON PILLS
-POISON_PILLS_RAW = [
-    "Women's Flag", "Flag Football", "Men's Basketball", "Women's Basketball", 
-    "Volleyball", "Baseball", "Softball", "Soccer", "Tennis", "Golf", 
-    "Swimming", "Lacrosse", "Hockey", "Wrestling", "Gymnastics"
+# POISON PILLS: STRICTLY FOR HEADER CHECK (Title/School)
+POISON_PILLS_HEADER = [
+    "Flag", "Women's Flag", "Volleyball", "Baseball", "Softball", 
+    "Soccer", "Tennis", "Golf", "Swimming", "Lacrosse", "Hockey", 
+    "Wrestling", "Gymnastics", "Basketball", "Track & Field", "Crew", 
+    "Rowing", "Sailing", "Cheerleading", "Fencing", "Spirit Squad"
 ]
 
 BAD_NAMES = [
-    "Football Roster", "Football Schedule", "Composite Schedule", "Game Recap", 
-    "Box Score", "Statistic", "Menu", "Search", "Tickets", "Donate", "Camps", 
-    "Facilities", "Staff Directory", "2024", "2025", "2026", "Privacy Policy", 
-    "Terms of Service", "Accessibility", "Ad Blocker"
+    "Football Roster", "Football Schedule", "Men's Basketball", "Women's Basketball", 
+    "Composite Schedule", "Game Recap", "Box Score", "Statistic", "Menu", "Search",
+    "Tickets", "Donate", "Camps", "Facilities", "Staff Directory", "2024", "2025", "2026",
+    "Privacy Policy", "Terms of Service", "Accessibility", "Ad Blocker"
 ]
 
 JOB_TITLES = [
@@ -220,11 +220,11 @@ def detect_school_from_url(bio_text):
 def detect_sport_context(bio):
     if pd.isna(bio): return "Uncertain"
     text = str(bio)
-    intro_text = text[:1000].lower()
-    for poison in POISON_PILLS_RAW:
-        if poison.lower() in intro_text: return None 
+    
+    # NEW FIX: IGNORE THE MENU!
+    # Only analyze text AFTER the first 500 characters to skip nav bars
+    analysis_text = text[500:].lower() if len(text) > 800 else text.lower()
 
-    analysis_text = text[200:].lower() if len(text) > 500 else text.lower()
     fb_score = sum(analysis_text.count(w) for w in FOOTBALL_INDICATORS)
     max_other_score = 0
     likely_other_sport = None
@@ -351,15 +351,20 @@ if submit_button:
                                 if any(bad.lower() in str(name).lower() for bad in BAD_NAMES): return None
                                 if len(str(name)) > 40: return None
                                 
+                                # HEADER POISON CHECK (Strict)
+                                title = row.get('Title', '')
+                                if not title or title == "Unknown": title = meta['Title'] or title
+                                school = row.get('School', '')
+                                if not school or school == "Unknown": school = meta['School'] or school
+                                
+                                header_check = (str(title) + " " + str(school)).lower()
+                                for poison in POISON_PILLS_HEADER:
+                                    if poison.lower() in header_check: return None
+
+                                # SPORT SIPHON
                                 detected_sport = detect_sport_context(row['Full_Bio'])
                                 if detected_sport != "Football" and detected_sport != "Uncertain": return None 
 
-                                school = row.get('School', '')
-                                if not school or school == "Unknown": school = meta['School'] or school
-                                    
-                                title = row.get('Title', '')
-                                if not title or title == "Unknown": title = meta['Title'] or title
-                                
                                 role = meta['Role']
                                 if role == "COACH/STAFF":
                                     if detect_player_by_context(row['Full_Bio'], title):
@@ -412,7 +417,6 @@ if submit_button:
                 cols = ['Role', 'Name', 'Title', 'School', 'Sport', 'Email', 'Twitter', 'Context_Snippet', 'Full_Bio']
                 final_df = final_df[cols]
                 
-                # SAVE TO SESSION STATE
                 st.session_state.search_results = final_df
                 safe_kw = keywords[0].replace(' ', '_')
                 date_str = datetime.now().strftime("%Y-%m-%d")
