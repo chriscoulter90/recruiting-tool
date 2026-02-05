@@ -62,7 +62,6 @@ NON_FOOTBALL_INDICATORS = {
 POISON_PILLS_TEXT = ["Women's Flag", "Flag Football"]
 BAD_NAMES = ["Football Roster", "Football Schedule", "Composite Schedule", "Game Recap", "Menu", "Search", "Tickets"]
 
-# EXPANDED ALIAS LIST (Applied to DB and Search)
 SCHOOL_ALIASES = {
     "ASU": "Arizona State", "UCF": "Central Florida", "Ole Miss": "Mississippi", 
     "FSU": "Florida State", "Miami": "Miami (FL)", "UConn": "Connecticut",
@@ -88,7 +87,7 @@ def load_lookup():
     df = None
     source = "None"
     
-    # 1. Try Google Sheet (Best source)
+    # 1. Try Google Sheet
     try:
         r = requests.get(GOOGLE_SHEET_CSV_URL, timeout=3)
         if r.ok:
@@ -96,7 +95,7 @@ def load_lookup():
             source = "Google Sheet"
     except: pass
     
-    # 2. Try Local File (Fallback)
+    # 2. Try Local File
     if df is None or df.empty:
         possible_files = glob.glob("*master*.csv") + glob.glob("*MASTER*.csv")
         if possible_files:
@@ -138,7 +137,7 @@ def load_lookup():
     for _, row in df.iterrows():
         raw_school = str(row[c_school]).strip() if c_school and pd.notna(row[c_school]) else ""
         
-        # APPLY ALIASES TO DB (Crucial for FSU -> Florida State)
+        # APPLY ALIASES TO DB
         for alias, real in SCHOOL_ALIASES.items():
             if alias.lower() == raw_school.lower(): raw_school = real
         
@@ -159,4 +158,156 @@ def load_lookup():
             
             lookup[(s_key, n_key)] = rec
             
-            if n_key not in name
+            if n_key not in name_lookup: name_lookup[n_key] = []
+            name_lookup[n_key].append(rec)
+            
+            if (s_key, l_key) not in lastname_lookup: lastname_lookup[(s_key, l_key)] = []
+            lastname_lookup[(s_key, l_key)].append(rec)
+            
+    return lookup, name_lookup, lastname_lookup, source, found_cols
+
+if "master_data" not in st.session_state:
+    st.session_state["master_data"] = load_lookup()
+master_lookup, name_lookup, lastname_lookup, db_source, db_cols = st.session_state["master_data"]
+
+def detect_sport(bio):
+    text = str(bio).lower()
+    if any(p.lower() in text[:1000] for p in POISON_PILLS_TEXT): return None
+    fb_score = sum(text.count(w) for w in FOOTBALL_INDICATORS)
+    for sport, keywords in NON_FOOTBALL_INDICATORS.items():
+        if sum(text.count(w) for w in keywords) > fb_score + 1: return None
+    return "Football"
+
+def parse_header(bio):
+    lines = [L.strip() for L in str(bio).split('\n') if L.strip()][:8]
+    header = next((L for L in lines if " - " in L and "http" not in L), None)
+    extracted = {'Name': None, 'Title': "Staff", 'School': "Unknown", 'Role': 'COACH/STAFF', 'Last': ''}
+    if header:
+        parts = header.split(' - ')
+        if len(parts) >= 2:
+            extracted['Name'] = parts[0].strip()
+            extracted['Last'] = parts[0].strip().split(' ')[-1] # Guess last name
+            extracted['School'] = parts[-1].strip()
+            if len(parts) > 2: extracted['Title'] = parts[1].strip()
+    for alias, real in SCHOOL_ALIASES.items():
+        if alias.lower() in extracted['School'].lower(): extracted['School'] = real
+    if "202" in extracted['Title'] or "Roster" in extracted['Title']:
+        extracted['Role'] = "PLAYER"; extracted['Title'] = "Roster Member"
+    return extracted
+
+def get_snippet(text, keyword):
+    clean_text = str(text).replace(chr(10), ' ').replace(chr(13), ' ')
+    m = re.search(re.escape(keyword), clean_text, re.IGNORECASE)
+    if m: 
+        s, e = max(0, m.start()-50), min(len(clean_text), m.end()+50)
+        return f"...{clean_text[s:e]}..."
+    return clean_text[:100] + "..."
+
+# --- 4. SEARCH LOGIC ---
+st.markdown('<p class="instruction-text">Type in keywords to search college football webpage bios.<br>Put a comma between keywords for multiple searches (e.g., "Linebacker, Recruiting").</p>', unsafe_allow_html=True)
+
+if db_source == "Failed":
+    st.markdown(f'<div class="status-box status-fail">❌ Master Database Not Found. Contact info will be empty.</div>', unsafe_allow_html=True)
+else:
+    count = len(master_lookup)
+    col_str = ", ".join(db_cols)
+    st.markdown(f'<div class="status-box status-success">✅ DB Active ({count} records). Found: {col_str}</div>', unsafe_allow_html=True)
+
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    with st.form(key='search_form'):
+        keywords_str = st.text_input("", placeholder="🔍 Enter keywords...")
+        submit_button = st.form_submit_button(label='Search')
+
+if 'search_results' not in st.session_state:
+    st.session_state['search_results'] = pd.DataFrame()
+if 'last_keywords' not in st.session_state:
+    st.session_state['last_keywords'] = ""
+
+if submit_button and keywords_str:
+    keywords = [k.strip() for k in keywords_str.split(',') if k.strip()]
+    pattern = '|'.join([re.escape(k) for k in keywords])
+    st.session_state['last_keywords'] = keywords_str
+    
+    chunk_files = glob.glob("chunk_*.csv")
+    chunk_files.sort()
+    
+    if not chunk_files:
+        st.error("❌ No database files found on server.")
+    else:
+        results_found = []
+        progress_bar = st.progress(0)
+        
+        for i, file in enumerate(chunk_files):
+            try:
+                df_chunk = pd.read_csv(file, usecols=['Full_Bio'], dtype=str, on_bad_lines='skip').fillna("")
+                mask = df_chunk['Full_Bio'].str.contains(pattern, case=False, na=False, regex=True)
+                
+                if mask.any():
+                    matches = df_chunk[mask].copy()
+                    
+                    for idx, row in matches.iterrows():
+                        meta = parse_header(row['Full_Bio'])
+                        name = meta['Name'] or "Unknown"
+                        
+                        if any(b.lower() in str(name).lower() for b in BAD_NAMES): continue
+                        if detect_sport(row['Full_Bio']) != "Football": continue
+                        
+                        s_key = normalize_text(meta['School'])
+                        n_key = normalize_text(name)
+                        l_key = normalize_text(meta['Last'])
+                        
+                        # MATCHING LOGIC
+                        match = {}
+                        if (s_key, n_key) in master_lookup:
+                            match = master_lookup[(s_key, n_key)]
+                        elif (s_key, l_key) in lastname_lookup:
+                            match = lastname_lookup[(s_key, l_key)][0]
+                        elif n_key in name_lookup:
+                            match = name_lookup[n_key][0]
+
+                        results_found.append({
+                            'Role': meta['Role'],
+                            'Name': name,
+                            'Title': match.get('title') or meta['Title'],
+                            'School': match.get('school') or meta['School'],
+                            'Email': match.get('email', ''),
+                            'Twitter': match.get('twitter', ''),
+                            'Context': get_snippet(row['Full_Bio'], keywords[0]),
+                            'Full_Bio': row['Full_Bio']
+                        })
+                
+                del df_chunk
+                gc.collect()
+            except Exception: continue
+            progress_bar.progress((i + 1) / len(chunk_files))
+
+        progress_bar.empty()
+
+        if results_found:
+            df_res = pd.DataFrame(results_found).drop_duplicates(subset=['Name', 'School'])
+            df_res['Full_Bio'] = df_res['Full_Bio'].astype(str).str.replace(r'[\r\n]+', ' ', regex=True)
+            df_res.sort_values(by=['Role', 'Name'], ascending=[True, True], inplace=True)
+            st.session_state['search_results'] = df_res
+        else:
+            st.session_state['search_results'] = pd.DataFrame()
+            st.warning("No matches found.")
+
+if not st.session_state['search_results'].empty:
+    final_df = st.session_state['search_results']
+    st.success(f"🎉 Found {len(final_df)} matches.")
+    
+    st.dataframe(final_df, column_config={"Full_Bio": None}, use_container_width=True, hide_index=True)
+    
+    safe_kw = re.sub(r'[^a-zA-Z0-9]', '_', st.session_state['last_keywords'][:20])
+    file_name_dynamic = f"Search_{safe_kw}_{datetime.now().date()}.xlsx"
+    
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+        final_df.to_excel(writer, index=False, sheet_name="Results")
+        worksheet = writer.sheets['Results']
+        worksheet.set_column(0, 0, 15)
+        worksheet.set_column(1, 5, 30)
+        worksheet.set_column(6, 6, 50)
+    
+    st.download_button("💾 DOWNLOAD EXCEL", buffer.getvalue(), file_name_dynamic, "application/vnd.ms-excel")
