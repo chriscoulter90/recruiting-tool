@@ -56,7 +56,6 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- 2. CONSTANTS ---
-# Use flexible filename check to prevent Linux crashes
 if os.path.exists('REC_CONS_MASTER.csv'):
     MASTER_DB_FILE = 'REC_CONS_MASTER.csv'
 elif os.path.exists('rec_cons_master.csv'):
@@ -73,7 +72,6 @@ NON_FOOTBALL_INDICATORS = {
     "Basketball": ["basketball", "nba", "dunk", "rebound"], "Soccer": ["soccer", "goal", "striker", "fifa"],
     "Softball": ["softball"], "Track": ["track", "sprint"], "Swimming": ["swim", "dive"], "Lacrosse": ["lacrosse"]
 }
-GARBAGE_PHRASES = ["Official Athletics Website", "Composite", "Javascript is required", "Skip To Main Content", "View Full Profile"]
 POISON_PILLS_TEXT = ["Women's Flag", "Flag Football"]
 BAD_NAMES = ["Football Roster", "Football Schedule", "Composite Schedule", "Game Recap", "Menu", "Search", "Tickets"]
 SCHOOL_ALIASES = {"ASU": "Arizona State", "UCF": "Central Florida", "Ole Miss": "Mississippi", "FSU": "Florida State", "Miami": "Miami (FL)"}
@@ -90,21 +88,18 @@ def normalize_text(text):
 def load_lookup():
     """Load coach database safely on demand."""
     try:
-        # 1. Try Google Sheet first
         try:
             r = requests.get(GOOGLE_SHEET_CSV_URL, timeout=5)
             if r.ok:
                 df = pd.read_csv(io.BytesIO(r.content), encoding='utf-8')
         except: df = None
         
-        # 2. Try local file if Sheet fails
         if (df is None or df.empty) and MASTER_DB_FILE:
             try: df = pd.read_csv(MASTER_DB_FILE, encoding='utf-8')
             except: df = pd.read_csv(MASTER_DB_FILE, encoding='latin1')
             
         if df is None or df.empty: return {}, {}
 
-        # Build Lookup
         lookup, name_lookup = {}, {}
         col_map = {str(c).strip().lower(): c for c in df.columns}
         
@@ -132,7 +127,6 @@ def load_lookup():
         return lookup, name_lookup
     except: return {}, {}
 
-# Lazy load master data so app doesn't crash on boot
 if "master_data" not in st.session_state:
     st.session_state["master_data"] = load_lookup()
 master_lookup, name_lookup = st.session_state["master_data"]
@@ -168,7 +162,7 @@ def get_snippet(text, keyword):
         return f"...{text[s:e]}..."
     return text[:150] + "..."
 
-# --- 4. SEARCH LOGIC (LOW MEMORY MODE) ---
+# --- 4. SEARCH LOGIC ---
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     with st.form(key='search_form'):
@@ -179,7 +173,6 @@ if submit_button and keywords_str:
     keywords = [k.strip() for k in keywords_str.split(',') if k.strip()]
     pattern = '|'.join([re.escape(k) for k in keywords])
     
-    # 1. Get files but DO NOT load them yet
     chunk_files = glob.glob("chunk_*.csv")
     chunk_files.sort()
     
@@ -189,11 +182,10 @@ if submit_button and keywords_str:
         results_found = []
         progress_bar = st.progress(0)
         
-        # 2. Loop through files one by one (Low Memory)
         for i, file in enumerate(chunk_files):
             try:
-                # Load ONE chunk, search it, then delete it immediately
-                df_chunk = pd.read_csv(file, dtype=str, on_bad_lines='skip').fillna("")
+                # Load only required columns (Full_Bio) to save memory
+                df_chunk = pd.read_csv(file, usecols=['Full_Bio'], dtype=str, on_bad_lines='skip').fillna("")
                 mask = df_chunk['Full_Bio'].str.contains(pattern, case=False, na=False, regex=True)
                 
                 if mask.any():
@@ -201,12 +193,11 @@ if submit_button and keywords_str:
                     
                     for idx, row in matches.iterrows():
                         meta = parse_header(row['Full_Bio'])
-                        name = meta['Name'] or row.get('Name', 'Unknown')
+                        name = meta['Name'] or "Unknown"
                         
                         if any(b.lower() in str(name).lower() for b in BAD_NAMES): continue
                         if detect_sport(row['Full_Bio']) != "Football": continue
                         
-                        # Master DB Match
                         s_key = normalize_text(meta['School'])
                         n_key = normalize_text(name)
                         match = master_lookup.get((s_key, n_key), {})
@@ -220,29 +211,34 @@ if submit_button and keywords_str:
                             'Email': match.get('email', ''),
                             'Twitter': match.get('twitter', ''),
                             'Context': get_snippet(row['Full_Bio'], keywords[0]),
-                            'Full_Bio': row['Full_Bio']
+                            # Removed Full_Bio from this list so it never touches the Excel file
                         })
                 
-                # Free memory instantly
                 del df_chunk
                 gc.collect()
-                
             except Exception: continue
-            
-            # Update progress
             progress_bar.progress((i + 1) / len(chunk_files))
 
         progress_bar.empty()
 
-        # 3. Display Results
         if results_found:
             final_df = pd.DataFrame(results_found).drop_duplicates(subset=['Name', 'School'])
             st.success(f"🎉 Found {len(final_df)} matches.")
-            st.dataframe(final_df.drop(columns=['Full_Bio']), use_container_width=True, hide_index=True)
+            st.dataframe(final_df, use_container_width=True, hide_index=True)
+            
+            # Dynamic Filename
+            safe_kw = re.sub(r'[^a-zA-Z0-9]', '_', keywords_str[:20])
+            file_name_dynamic = f"Search_{safe_kw}_{datetime.now().date()}.xlsx"
             
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                 final_df.to_excel(writer, index=False, sheet_name="Results")
-            st.download_button("💾 DOWNLOAD EXCEL", buffer.getvalue(), f"Search_{datetime.now().date()}.xlsx", "application/vnd.ms-excel")
+            
+            st.download_button(
+                label="💾 DOWNLOAD EXCEL",
+                data=buffer.getvalue(),
+                file_name=file_name_dynamic,
+                mime="application/vnd.ms-excel"
+            )
         else:
             st.warning("No matches found.")
