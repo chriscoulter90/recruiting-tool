@@ -34,9 +34,6 @@ st.markdown("""
     .main-title { font-size: 3.2rem; font-weight: 700; color: #FFFFFF; margin: 0; letter-spacing: -1.5px; }
     .sub-title { font-size: 1.1rem; font-weight: 500; color: #8E8E93; margin-top: 8px; text-transform: uppercase; letter-spacing: 4px; }
     .instruction-text { text-align: center; color: #555; font-size: 1.1em; margin-bottom: 20px; }
-    .status-box { text-align: center; font-weight: bold; padding: 10px; margin-bottom: 20px; border-radius: 10px; font-size: 0.9em; }
-    .status-success { background-color: #d4edda; color: #155724; }
-    .status-fail { background-color: #f8d7da; color: #721c24; }
     
     /* TABLE */
     .stDataFrame { background-color: white; border-radius: 20px; padding: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); }
@@ -77,7 +74,8 @@ SCHOOL_ALIASES = {
 def normalize_text(text):
     if pd.isna(text): return ""
     text = str(text).lower()
-    for word in ['university', 'univ', 'college', 'state', 'the', 'of', 'athletics', 'inst', 'tech', 'a&m']:
+    # Less aggressive removal: Keep 'state', 'tech', 'a&m' to preserve school identity
+    for word in ['university', 'univ', 'college', 'the', 'of', 'athletics', 'inst']:
         text = text.replace(word, '')
     return re.sub(r'[^a-z0-9]', '', text).strip()
 
@@ -85,31 +83,23 @@ def normalize_text(text):
 def load_lookup():
     """Load coach database safely."""
     df = None
-    source = "None"
     
-    # 1. Try Google Sheet
     try:
         r = requests.get(GOOGLE_SHEET_CSV_URL, timeout=3)
         if r.ok:
             df = pd.read_csv(io.BytesIO(r.content), encoding='utf-8')
-            source = "Google Sheet"
     except: pass
     
-    # 2. Try Local File
     if df is None or df.empty:
         possible_files = glob.glob("*master*.csv") + glob.glob("*MASTER*.csv")
         if possible_files:
-            try: 
-                df = pd.read_csv(possible_files[0], encoding='utf-8')
-                source = f"Local File"
+            try: df = pd.read_csv(possible_files[0], encoding='utf-8')
             except: 
                 try: df = pd.read_csv(possible_files[0], encoding='latin1')
                 except: pass
 
-    if df is None or df.empty:
-        return {}, {}, {}, "Failed", []
+    if df is None or df.empty: return {}, {}, {}, []
 
-    # --- AGGRESSIVE COLUMN FINDER ---
     cols_lower = {c.lower().strip(): c for c in df.columns}
     
     def get_col_name(*candidates):
@@ -120,31 +110,25 @@ def load_lookup():
                 if c.lower() in actual: return cols_lower[actual]
         return None
 
-    c_school = get_col_name('school', 'institution', 'university')
+    c_school = get_col_name('school', 'institution')
     c_first = get_col_name('first name', 'first')
     c_last = get_col_name('last name', 'last')
-    c_email = get_col_name('email', 'e-mail', 'mail')
+    c_email = get_col_name('email', 'e-mail')
     c_twitter = get_col_name("individual's twitter", "twitter", "x.com", "social")
     c_title = get_col_name('title', 'position', 'role')
-
-    found_cols = []
-    if c_school: found_cols.append("School")
-    if c_email: found_cols.append("Email")
-    if c_twitter: found_cols.append("Twitter")
 
     lookup, name_lookup, lastname_lookup = {}, {}, {}
 
     for _, row in df.iterrows():
         raw_school = str(row[c_school]).strip() if c_school and pd.notna(row[c_school]) else ""
         
-        # APPLY ALIASES TO DB
         for alias, real in SCHOOL_ALIASES.items():
             if alias.lower() == raw_school.lower(): raw_school = real
         
         first = str(row[c_first]).strip() if c_first and pd.notna(row[c_first]) else ""
         last = str(row[c_last]).strip() if c_last and pd.notna(row[c_last]) else ""
         
-        if raw_school and (first or last):
+        if first or last:
             full_name = f"{first} {last}".strip()
             email = str(row[c_email]).strip() if c_email and pd.notna(row[c_email]) else ""
             twitter = str(row[c_twitter]).strip() if c_twitter and pd.notna(row[c_twitter]) else ""
@@ -156,19 +140,23 @@ def load_lookup():
             n_key = normalize_text(full_name)
             l_key = normalize_text(last)
             
-            lookup[(s_key, n_key)] = rec
+            # School + Name
+            if s_key: lookup[(s_key, n_key)] = rec
             
+            # Name Only (Fallback)
             if n_key not in name_lookup: name_lookup[n_key] = []
             name_lookup[n_key].append(rec)
             
-            if (s_key, l_key) not in lastname_lookup: lastname_lookup[(s_key, l_key)] = []
-            lastname_lookup[(s_key, l_key)].append(rec)
+            # School + Last Name (Deep Fallback)
+            if s_key:
+                if (s_key, l_key) not in lastname_lookup: lastname_lookup[(s_key, l_key)] = []
+                lastname_lookup[(s_key, l_key)].append(rec)
             
-    return lookup, name_lookup, lastname_lookup, source, found_cols
+    return lookup, name_lookup, lastname_lookup, []
 
 if "master_data" not in st.session_state:
     st.session_state["master_data"] = load_lookup()
-master_lookup, name_lookup, lastname_lookup, db_source, db_cols = st.session_state["master_data"]
+master_lookup, name_lookup, lastname_lookup, db_cols = st.session_state["master_data"]
 
 def detect_sport(bio):
     text = str(bio).lower()
@@ -180,15 +168,21 @@ def detect_sport(bio):
 
 def parse_header(bio):
     lines = [L.strip() for L in str(bio).split('\n') if L.strip()][:8]
-    header = next((L for L in lines if " - " in L and "http" not in L), None)
+    # Expanded delimiters: try " - ", " | ", " : "
+    header = None
+    for delimiter in [" - ", " | ", " : "]:
+        header = next((L for L in lines if delimiter in L and "http" not in L), None)
+        if header: break
+        
     extracted = {'Name': None, 'Title': "Staff", 'School': "Unknown", 'Role': 'COACH/STAFF', 'Last': ''}
     if header:
-        parts = header.split(' - ')
+        parts = re.split(r' - | \| | : ', header)
         if len(parts) >= 2:
             extracted['Name'] = parts[0].strip()
-            extracted['Last'] = parts[0].strip().split(' ')[-1] # Guess last name
+            extracted['Last'] = parts[0].strip().split(' ')[-1]
             extracted['School'] = parts[-1].strip()
             if len(parts) > 2: extracted['Title'] = parts[1].strip()
+            
     for alias, real in SCHOOL_ALIASES.items():
         if alias.lower() in extracted['School'].lower(): extracted['School'] = real
     if "202" in extracted['Title'] or "Roster" in extracted['Title']:
@@ -205,13 +199,6 @@ def get_snippet(text, keyword):
 
 # --- 4. SEARCH LOGIC ---
 st.markdown('<p class="instruction-text">Type in keywords to search college football webpage bios.<br>Put a comma between keywords for multiple searches (e.g., "Linebacker, Recruiting").</p>', unsafe_allow_html=True)
-
-if db_source == "Failed":
-    st.markdown(f'<div class="status-box status-fail">❌ Master Database Not Found. Contact info will be empty.</div>', unsafe_allow_html=True)
-else:
-    count = len(master_lookup)
-    col_str = ", ".join(db_cols)
-    st.markdown(f'<div class="status-box status-success">✅ DB Active ({count} records). Found: {col_str}</div>', unsafe_allow_html=True)
 
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
@@ -257,12 +244,15 @@ if submit_button and keywords_str:
                         n_key = normalize_text(name)
                         l_key = normalize_text(meta['Last'])
                         
-                        # MATCHING LOGIC
+                        # MATCHING LOGIC (Cascading)
                         match = {}
+                        # 1. Exact Match
                         if (s_key, n_key) in master_lookup:
                             match = master_lookup[(s_key, n_key)]
+                        # 2. Last Name + School Match
                         elif (s_key, l_key) in lastname_lookup:
                             match = lastname_lookup[(s_key, l_key)][0]
+                        # 3. Name Only Match (Ignore School - Last Resort)
                         elif n_key in name_lookup:
                             match = name_lookup[n_key][0]
 
