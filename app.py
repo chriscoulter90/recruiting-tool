@@ -6,6 +6,9 @@ import os
 import re
 from datetime import datetime
 
+# --- PAGE CONFIGURATION (Must be first) ---
+st.set_page_config(page_title="Recruiting Search Pro", page_icon="🏈", layout="wide")
+
 # --- CONFIGURATION ---
 DB_FILE = 'football_master_db.csv'
 MASTER_DB_FILE = 'REC_CONS_MASTER.csv' 
@@ -138,4 +141,305 @@ def load_data():
 def get_snippet(text, keyword):
     if pd.isna(text) or text == "": return ""
     clean_text = str(text).replace('\n', ' ').replace('\r', ' ')
-    for term in GOLD_
+    for term in GOLD_CONTEXT_TERMS:
+        pattern = re.compile(f"({term}.{{0,60}}{re.escape(keyword)}|{re.escape(keyword)}.{{0,60}}{term})", re.IGNORECASE)
+        m = pattern.search(clean_text)
+        if m:
+            s, e = max(0, m.start()-40), min(len(clean_text), m.end()+40)
+            return f"...{clean_text[s:e].strip()}..."
+    m = re.search(re.escape(keyword), clean_text, re.IGNORECASE)
+    if m:
+        s, e = max(0, m.start()-70), min(len(clean_text), m.end()+70)
+        return f"...{clean_text[s:e].strip()}..."
+    return f"...{clean_text[:140]}..."
+
+def clean_row_logic(row):
+    # --- 0. PRE-CLEAN ---
+    for col in row.index:
+        if isinstance(row[col], str):
+            row[col] = str(row[col]).replace('’', "'").replace('‘', "'").replace('\n', ' ').replace('\r', ' ').strip()
+    
+    name = str(row.get('Name', '')).strip()
+    title = str(row.get('Title', '')).strip()
+    school = str(row.get('School', '')).strip()
+    bio = str(row.get('Full_Bio', '')).strip()
+    role = str(row.get('Role', '')).strip().upper()
+
+    # --- 1. GARBAGE COLLECTOR ---
+    if name.isdigit() or "Skip To Main Content" in title or any(g in name for g in GARBAGE_NAMES):
+        row['Name'] = "DELETE_ME"; return row
+
+    # --- 2. BIO PREP ---
+    clean_bio = bio
+    if "Close Announce Block" in bio:
+        parts = bio.split("Close Announce Block")
+        if len(parts) > 1: clean_bio = parts[1]
+    
+    for split_term in ["Skip To Main Content", "Navigation Menu", "related stories", "Composite"]:
+         parts = re.split(re.escape(split_term), clean_bio, flags=re.IGNORECASE)
+         if len(parts) > 1: clean_bio = parts[0]; break
+
+    # --- 3. NAME CLEANUP ---
+    if "?" in name: name = name.split("?")[0].strip()
+    if name.lower().startswith("tech "): name = name[5:].strip()
+    while "  " in name: name = name.replace("  ", " ")
+
+    # --- 4. SCHOOL FIXER ---
+    if school in SCHOOL_CORRECTIONS: school = SCHOOL_CORRECTIONS[school]
+    elif school == "Boston" and "College" not in school: school = "Boston College"
+
+    # --- 5. PLAYER CARD SCANNER ---
+    is_player_card = False
+    pos_match = re.search(r"(?:Position|Pos)[:\s]+([A-Za-z0-9/]+)", bio[:5000], re.IGNORECASE)
+    class_match = re.search(r"(?:Class|Cl\.)[:\s]+([A-Za-z\.]+)", bio[:5000], re.IGNORECASE)
+    hs_match = re.search(r"High School:", bio[:5000], re.IGNORECASE)
+
+    if pos_match or (class_match and hs_match) or re.search(r"Height:.*Weight:", bio[:5000], re.IGNORECASE):
+        is_player_card = True; role = "PLAYER"
+        if pos_match: title = pos_match.group(1).strip()
+        else: title = "Roster Member"
+
+    # --- 6. BROADENED SPORT ASSASSIN ---
+    if not is_player_card and name != "Dabo Swinney":
+        header = clean_bio[:1000].lower()
+        has_football = "football" in header or "football" in title.lower()
+        for sport in FORBIDDEN_SPORTS:
+            if sport.lower() in header:
+                if not has_football: 
+                    row['Name'] = "DELETE_ME"; return row
+
+    # --- 7. SPECIAL CLEMSON/DABO FIX ---
+    if "dabo" in name.lower() and "clemson" in school.lower():
+        name = "Dabo Swinney"; title = "Head Coach"; role = "COACH/STAFF"
+
+    # --- 8. SCHOOL CLEANUP 2 ---
+    if school.endswith("-"): school = school[:-1].strip()
+    if school.lower() in ["university of", "university", "the university of"]:
+        match = re.search(r"(?:University of|at)\s+([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)", title + " | " + bio)
+        if match: school = match.group(0).replace("at ", "University of ")
+
+    # --- 9. NAME CLEANUP & RESCUE ---
+    if name.lower().startswith(school.lower()):
+        name = name[len(school):].strip()
+    elif school.split()[0].lower() in name.lower():
+        name = re.sub(f"^{re.escape(school.split()[0])}\\s+", "", name, flags=re.IGNORECASE)
+
+    name = re.sub(r"^(University|Coach|Staff|The|Profile|View)\s+", "", name, flags=re.IGNORECASE)
+    if "-" in name and not any(x in name for x in ["Sr.", "Jr.", "III"]): name = name.replace("-", " ")
+    
+    is_digit_name = any(char.isdigit() for char in name)
+    is_single_word = " " not in name.strip() and len(name) > 1
+    
+    is_junk_name = any(ind.lower() in name.lower() for ind in BAD_NAME_INDICATORS) or \
+                   len(name) < 3 or is_digit_name or "(" in name or is_single_word
+    
+    if is_junk_name:
+        rescued_name = None
+        if is_single_word and not is_digit_name:
+            sm = re.search(rf"\b{re.escape(name)}\s+([A-Z][a-z]+(?:[-'][A-Z][a-z]+)?)", bio[:300])
+            if sm: 
+                pot = sm.group(1)
+                if pot.lower() not in ["bio", "profile", "football", "coach", "staff", "university"]: rescued_name = f"{name} {pot}"
+
+        if not rescued_name:
+            parts = title.split()
+            if len(parts) >= 2 and parts[0].lower() not in ["head", "assistant", "associate", "football"]:
+                 pot = f"{parts[0]} {parts[1]}"
+                 if not any(ind.lower() in pot.lower() for ind in BAD_NAME_INDICATORS): rescued_name = pot
+
+        if not rescued_name:
+            bm = re.search(r"([A-Z][a-z\.]+(?:\s+[A-Z][a-z\.]+)+)\s+-\s+", clean_bio[:3000])
+            if bm: 
+                pot = bm.group(1).strip()
+                if not any(ind.lower() in pot.lower() for ind in BAD_NAME_INDICATORS): rescued_name = pot
+            
+        if not rescued_name:
+            bp = re.search(r"([A-Z][a-z\.]+(?:\s+[A-Z][a-z\.]+)+)\s+\|\s+", clean_bio[:3000])
+            if bp: 
+                pot = bp.group(1).strip()
+                if not any(ind.lower() in pot.lower() for ind in BAD_NAME_INDICATORS): rescued_name = pot
+        
+        if not rescued_name:
+            sm = re.search(r"([A-Z][a-z]+ [A-Z][a-z]+) (?:is|joined|starts|begins|enters|was named|returned)", clean_bio[:1000])
+            if sm:
+                pot = sm.group(1).strip()
+                if "The " not in pot and "He " not in pot: rescued_name = pot
+
+        if rescued_name: name = rescued_name
+        elif is_digit_name or "Skip To" in title: row['Name'] = "DELETE_ME"; return row
+
+    # --- 10. SUFFIX SAVER ---
+    suffix_match = re.match(r"^([A-Z][a-z]+\s+)?(Sr\.|Jr\.|II|III|IV|V)$", title, re.IGNORECASE)
+    if suffix_match: name = f"{name} {title}"; title = ""
+
+    # --- 11. TITLE PURGE ---
+    if re.fullmatch(r"20\d\d", title) or "Roster" in title:
+        role = "PLAYER"
+        pm = re.search(r"(?:Position|Pos)[:\s]+([A-Za-z0-9/]+)", bio[:5000], re.IGNORECASE)
+        if pm: title = pm.group(1).strip()
+        else: title = "Roster Member"
+    
+    if normalize_text(title) == normalize_text(school): title = ""
+    if " | " in title:
+        parts = title.split(" | ")
+        if normalize_text(parts[0]) == normalize_text(name): parts.pop(0)
+        title = " - ".join(parts)
+    if " - " in title:
+        parts = title.split(" - ")
+        if normalize_text(parts[0]) == normalize_text(name): parts.pop(0)
+        title = " - ".join(parts)
+    if name.lower() in title.lower():
+         title = re.sub(f"^{re.escape(name)}", "", title, flags=re.IGNORECASE).strip()
+         title = re.sub(f"^{re.escape(name)}[\s\-]+", "", title, flags=re.IGNORECASE).strip()
+    if len(name.split()) > 0:
+        last_name = name.split()[-1]
+        title = re.sub(f"Coach {re.escape(last_name)}", "", title, flags=re.IGNORECASE).strip()
+    if " - " in title:
+        parts = title.split(" - ")
+        cp = [p for p in parts if normalize_text(p) != normalize_text(school) and "University" not in p and "Athletics" not in p]
+        if cp: title = cp[0]
+    
+    words = title.split()
+    new_words = []
+    for w in words:
+        cw = w.upper().replace(".", "").replace(",", "")
+        if cw in TITLE_MAP: new_words.append(TITLE_MAP[cw])
+        else: new_words.append(w)
+    title = " ".join(new_words)
+    title = re.sub(r"^[^a-zA-Z0-9]+", "", title).strip()
+
+    # --- 12. ROLE HUNTER ---
+    GENERIC_TITLES = ["Football Coach", "Coach", "Staff", "Assistant Coach", "Football Staff", "Bio", "Profile", "Football", "", "Unknown"]
+    
+    if role != "PLAYER":
+        if not title or any(g.lower() == title.lower() for g in GENERIC_TITLES):
+            found_role = False
+            for pat, rep in ROLE_PATTERNS:
+                if re.search(pat, bio[:3000], re.IGNORECASE):
+                    title = rep; found_role = True; break
+            if not found_role: title = "Football Staff"
+
+    # --- 13. ROLE SYNCHRONIZER ---
+    t_low = title.lower()
+    if role == "UNCERTAIN" or role == "NAN" or not role:
+        if any(x in t_low for x in ["coach", "coordinator", "director", "assistant", "staff", "analyst", "manager"]): role = "COACH/STAFF"
+        elif any(x in t_low for x in ["roster", "player"]): role = "PLAYER"
+        elif t_low == "unknown": role = "UNCERTAIN"
+        else: role = "COACH/STAFF"
+
+    row['Role'] = role
+    row['Name'], row['Title'], row['School'] = name.title(), title, school
+    return row
+
+def process_search_streamlit(df, master_lookup, name_lookup, keywords):
+    all_clean = []
+    
+    for key in keywords:
+        mask = df['Full_Bio'].str.contains(key, case=False, na=False)
+        results = df[mask].copy()
+        if results.empty: continue
+
+        results = results.apply(clean_row_logic, axis=1)
+        results = results[results['Name'] != "DELETE_ME"]
+        results['Context_Snippet'] = results['Full_Bio'].apply(lambda x: get_snippet(x, key))
+
+        def enrich(row):
+            s_key, n_key = normalize_text(row['School']), normalize_text(row['Name'])
+            match = master_lookup.get((s_key, n_key))
+            
+            # Secondary Lookup: Correct School Name
+            if not match:
+                potential_matches = name_lookup.get(n_key, [])
+                for cand in potential_matches:
+                    c_school_norm = normalize_text(cand['school'])
+                    # Fuzzy Match
+                    if s_key in c_school_norm or c_school_norm in s_key:
+                        match = cand
+                        row['School'] = cand['school'] 
+                        break
+
+            if match:
+                if not row['Email'] or str(row['Email']).lower() in ['', 'nan', 'n/a']:
+                    row['Email'] = match['email']
+                if not row['Twitter'] or str(row['Twitter']).lower() in ['', 'nan', 'n/a']:
+                    if len(match['twitter']) > 3: row['Twitter'] = match['twitter']
+                if match['title'] and len(match['title']) > 2:
+                    row['Title'] = match['title']
+            
+            # Twitter Bio Hunter (Fallback)
+            if pd.isna(row['Twitter']) or str(row['Twitter']).strip() == "":
+                tw_match = re.search(r"twitter\.com/([a-zA-Z0-9_]+)", row['Full_Bio'], re.IGNORECASE)
+                if tw_match: row['Twitter'] = f"@{tw_match.group(1)}"
+                
+            return row
+
+        results = results.apply(enrich, axis=1)
+        is_wrong = results['Title'].str.contains('|'.join(FORBIDDEN_SPORTS), case=False, na=False)
+        clean_df = results[~is_wrong].copy()
+        
+        if not clean_df.empty:
+            clean_df['Search_Term'] = key
+            all_clean.append(clean_df)
+
+    if all_clean:
+        final_df = pd.concat(all_clean)
+        # Aggressive Dedupe
+        final_df.drop_duplicates(subset=['Name', 'School'], keep='first', inplace=True)
+        # Sort
+        role_map = {'COACH/STAFF': 1, 'PLAYER': 2, 'UNCERTAIN': 3}
+        final_df['Role_Rank'] = final_df['Role'].map(role_map).fillna(3)
+        final_df.sort_values(by=['Role_Rank', 'School', 'Name'], inplace=True)
+        
+        # Final Column Filter
+        cols_to_keep = ['Role', 'Name', 'Title', 'School', 'Sport', 'Email', 'Twitter', 'Context_Snippet', 'Full_Bio']
+        return final_df[cols_to_keep]
+    return pd.DataFrame()
+
+# --- STREAMLIT APP LAYOUT ---
+
+st.title("🏈 Recruiting Search Pro")
+st.markdown("Search the database of **57,000+ Profiles** for coaches and players.")
+
+# Initialize Data
+with st.spinner("Loading Database (This may take a moment)..."):
+    df, master_lookup, name_lookup = load_data()
+
+if df is None:
+    st.error(f"Could not load '{DB_FILE}'. Please make sure it is in your GitHub repository.")
+else:
+    st.success("✅ Database Ready")
+
+    # Search Bar
+    search_input = st.text_input("Enter Keywords (comma separated):", placeholder="e.g. tallahassee, atlanta, dallas")
+    
+    if st.button("Run Search"):
+        if not search_input:
+            st.warning("Please enter at least one keyword.")
+        else:
+            keywords = [k.strip() for k in search_input.split(',') if k.strip()]
+            with st.spinner(f"Searching for: {', '.join(keywords)}..."):
+                results_df = process_search_streamlit(df, master_lookup, name_lookup, keywords)
+            
+            if not results_df.empty:
+                st.subheader(f"Found {len(results_df)} Matches")
+                st.dataframe(results_df)
+                
+                # Excel Download
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                    results_df.to_excel(writer, index=False, sheet_name="Results")
+                    # Format
+                    workbook = writer.book
+                    worksheet = writer.sheets["Results"]
+                    header_fmt = workbook.add_format({'bold': True, 'bg_color': '#D9EAD3', 'border': 1})
+                    for col_num, value in enumerate(results_df.columns.values):
+                        worksheet.write(0, col_num, value, header_fmt)
+                
+                st.download_button(
+                    label="💾 Download Excel File",
+                    data=buffer.getvalue(),
+                    file_name=f"Search_Results_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
+                    mime="application/vnd.ms-excel"
+                )
+            else:
+                st.info("No matches found.")
