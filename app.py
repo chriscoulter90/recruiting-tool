@@ -7,26 +7,38 @@ import io
 import requests
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Recruiting Search", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="Coulter Recruiting", page_icon="🏈", layout="wide")
 
 st.markdown("""
     <style>
     header {visibility: hidden;}
     footer {visibility: hidden;}
     .block-container {padding-top: 1rem;}
+    .title-text { text-align: center; font-size: 3rem; font-weight: 700; color: #002B5C; margin-bottom: 0; }
+    .subtitle-text { text-align: center; font-size: 1.2rem; color: #666; margin-top: -10px; margin-bottom: 30px; }
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🏈 Recruiting Search Engine")
+st.markdown('<div class="title-text">COULTER RECRUITING</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitle-text">FOOTBALL SEARCH ENGINE</div>', unsafe_allow_html=True)
 
-# --- 2. CONSTANTS ---
+# --- 2. CONSTANTS (MATCHING LOCAL SCRIPT) ---
 MASTER_DB_FILE = 'REC_CONS_MASTER.csv' 
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
-# Garbage phrases to strip out
+# Exact list from your local script
+FORBIDDEN_SPORTS = [
+    "Volleyball", "Baseball", "Softball", "Soccer", "Tennis", "Golf", 
+    "Swimming", "Lacrosse", "Hockey", "Wrestling", "Gymnastics", 
+    "Basketball", "Track & Field", "Crew", "Rowing", "Sailing", 
+    "Acrobatics", "Tumbling", "Cheerleading", "Fencing", "Spirit Squad",
+    "Women's Basketball", "Men's Basketball"
+]
+
 GARBAGE_PHRASES = [
     "Official Athletics Website", "Official Website", "Composite", 
-    "Javascript is required", "Skip To Main Content", "Official Football Roster"
+    "Javascript is required", "Skip To Main Content", "Official Football Roster",
+    "View Full Profile", "Related Headlines", "Source:", "https://"
 ]
 
 # --- 3. AUTO-LOAD MASTER DATA ---
@@ -71,17 +83,16 @@ if "master_data" not in st.session_state:
 
 master_lookup, name_lookup = st.session_state["master_data"]
 
-# --- 4. SMART PARSER ---
-def parse_header_smart(bio):
+# --- 4. LOGIC FUNCTIONS (MAC PARITY) ---
+def parse_header_exact(bio):
     extracted = {'Name': None, 'Title': None, 'School': None, 'Role': 'COACH/STAFF'}
     
-    # Flatten bio to single line for easier searching
-    clean_bio_text = str(bio).replace('\n', ' ').replace('\r', ' ')
+    # Normalize Dashes (Mac vs Cloud Fix)
+    clean_text = str(bio).replace('\r', '\n').replace('–', '-').replace('—', '-')
     
-    # Try to find header line in original formatting
-    lines = [L.strip() for L in str(bio).replace('\r', '\n').split('\n') if L.strip()]
+    lines = [L.strip() for L in clean_text.split('\n') if L.strip()]
     header = None
-    for line in lines[:6]:
+    for line in lines[:8]:
         if " - " in line and "http" not in line and "SOURCE" not in line:
             header = line
             break
@@ -106,17 +117,17 @@ def parse_header_smart(bio):
         elif len(clean_parts) == 1:
             extracted['Name'] = clean_parts[0]
 
-        # Fix Titles/Schools swaps
-        if extracted['Title'] and "University" in extracted['Title']:
+        if extracted['Title'] and ("University" in extracted['Title'] or "College" in extracted['Title']):
             temp = extracted['School']
             extracted['School'] = extracted['Title']
             extracted['Title'] = temp if temp else "Staff"
 
-        # Player Detection
         for val in [str(extracted['Title']), str(extracted['School'])]:
             if "202" in val or "203" in val:
                 extracted['Role'] = "PLAYER"
                 extracted['Title'] = "Roster Member"
+            if "Football" == val:
+                 if extracted['Role'] == "COACH/STAFF": extracted['Title'] = "Staff"
                 
     return extracted
 
@@ -130,9 +141,12 @@ def get_snippet(text, keyword):
     return f"...{clean[:100]}..."
 
 # --- 5. SEARCH LOGIC ---
-keywords_str = st.text_input("Enter Search Keywords:", placeholder="e.g. tallahassee, area recruiter")
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    keywords_str = st.text_input("", placeholder="🔍 Enter keywords (e.g. Tallahassee, Quarterback)...")
+    run_search = st.button("SEARCH DATABASE", use_container_width=True)
 
-if st.button("Run Search") or keywords_str:
+if run_search or keywords_str:
     if not keywords_str:
         st.warning("Please enter a keyword.")
     else:
@@ -175,7 +189,9 @@ if st.button("Run Search") or keywords_str:
                             found = chunk[mask].copy()
                             
                             def clean_and_fill(row):
-                                meta = parse_header_smart(row['Full_Bio'])
+                                # 1. Parse Header
+                                meta = parse_header_exact(row['Full_Bio'])
+                                
                                 name = row.get('Name', '')
                                 if not name or name == "Unknown" or len(name) < 3: name = meta['Name'] if meta['Name'] else name
                                 
@@ -187,12 +203,22 @@ if st.button("Run Search") or keywords_str:
                                 
                                 role = meta['Role']
 
-                                # Master Lookup
+                                # 2. Forbidden Sport Check (From Local Script)
+                                header_check = (str(title) + " " + str(school) + " " + str(row['Full_Bio'])[:200]).lower()
+                                for sport in FORBIDDEN_SPORTS:
+                                    if sport.lower() in header_check and "football" not in header_check:
+                                        return None # DROP ROW
+
+                                # 3. Master Lookup
                                 def n(t): return re.sub(r'[^a-z0-9]', '', str(t).lower())
                                 match = master_lookup.get((n(school), n(name)))
                                 if not match:
                                     candidates = name_lookup.get(n(name), [])
                                     if len(candidates) == 1: match = candidates[0]
+                                    elif len(candidates) > 1:
+                                        for cand in candidates:
+                                            if n(cand['school']) in n(school) or n(school) in n(cand['school']):
+                                                match = cand; break
                                 
                                 email = row.get('Email', '')
                                 twitter = row.get('Twitter', '')
@@ -203,16 +229,20 @@ if st.button("Run Search") or keywords_str:
                                     if title in ["Staff", "Unknown", "Football"]: title = match['title']
                                     school = match['school']
                                 
-                                # Flatten Bio to prevent massive rows
-                                flat_bio = str(row['Full_Bio']).replace('\n', ' ').replace('\r', ' ')
-                                flat_bio = re.sub(r'\s+', ' ', flat_bio).strip()
+                                flat_bio = str(row['Full_Bio']).replace('\n', ' ').replace('\r', ' ').strip()
+                                flat_bio = re.sub(r'\s+', ' ', flat_bio)
                                 
-                                return pd.Series([role, name, title, school, email, twitter, flat_bio])
+                                return pd.Series([role, name, title, school, "Football", email, twitter, flat_bio])
 
                             enriched = found.apply(clean_and_fill, axis=1)
-                            enriched.columns = ['Role', 'Name', 'Title', 'School', 'Email', 'Twitter', 'Full_Bio']
-                            enriched['Context_Snippet'] = enriched['Full_Bio'].apply(lambda x: get_snippet(x, keywords[0]))
-                            results.append(enriched)
+                            
+                            # Drop None rows (Forbidden sports)
+                            enriched.dropna(how='all', inplace=True) 
+                            
+                            if not enriched.empty:
+                                enriched.columns = ['Role', 'Name', 'Title', 'School', 'Sport', 'Email', 'Twitter', 'Full_Bio']
+                                enriched['Context_Snippet'] = enriched['Full_Bio'].apply(lambda x: get_snippet(x, keywords[0]))
+                                results.append(enriched)
                             
                     del chunk
                     gc.collect()
@@ -223,33 +253,31 @@ if st.button("Run Search") or keywords_str:
             if results:
                 final_df = pd.concat(results)
                 
-                # 1. Clean Garbage
+                # Cleanup
                 final_df = final_df[~final_df['Name'].str.contains("Skip To|Official|Javascript", case=False, na=False)]
                 final_df.dropna(subset=['Name'], inplace=True)
                 
-                # 2. SORTING: Role -> School -> Name
-                # To make Coaches appear before Players, we can map them
-                final_df['Role_Sort'] = final_df['Role'].apply(lambda x: 0 if "COACH" in str(x).upper() else 1)
+                # Sort: Role -> School -> Name
+                final_df['Role_Sort'] = final_df['Role'].apply(lambda x: 1 if "PLAYER" in str(x).upper() else 0)
                 final_df.sort_values(by=['Role_Sort', 'School', 'Name'], ascending=[True, True, True], inplace=True)
                 final_df.drop(columns=['Role_Sort'], inplace=True)
-
-                # 3. Final Columns
-                cols = ['Role', 'Name', 'Title', 'School', 'Email', 'Twitter', 'Context_Snippet', 'Full_Bio']
+                
+                # Column Order (MATCHING LOCAL EXACTLY)
+                cols = ['Role', 'Name', 'Title', 'School', 'Sport', 'Email', 'Twitter', 'Context_Snippet', 'Full_Bio']
                 final_df = final_df[cols]
                 
                 st.success(f"🎉 Found {len(final_df)} matches.")
-                st.dataframe(final_df)
+                st.dataframe(final_df, use_container_width=True)
                 
-                # Excel Export with Fixed Row Heights
+                # Excel Export
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     final_df.to_excel(writer, index=False, sheet_name="Results")
                     workbook = writer.book
                     worksheet = writer.sheets["Results"]
-                    # Format: No text wrap to keep rows small
                     cell_format = workbook.add_format({'text_wrap': False, 'valign': 'top'})
-                    worksheet.set_column('A:H', 20, cell_format)
+                    worksheet.set_column('A:I', 25, cell_format)
                     
-                st.download_button("💾 Download Results (Excel)", buffer.getvalue(), "Search_Results.xlsx", "application/vnd.ms-excel")
+                st.download_button("💾 DOWNLOAD RESULTS (EXCEL)", buffer.getvalue(), "Coulter_Recruiting_Results.xlsx", "application/vnd.ms-excel", type="primary")
             else:
                 st.warning("No matches found.")
