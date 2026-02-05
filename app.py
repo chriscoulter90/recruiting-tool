@@ -56,12 +56,12 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- 2. CONSTANTS ---
-if os.path.exists('REC_CONS_MASTER.csv'):
-    MASTER_DB_FILE = 'REC_CONS_MASTER.csv'
-elif os.path.exists('rec_cons_master.csv'):
-    MASTER_DB_FILE = 'rec_cons_master.csv'
-else:
-    MASTER_DB_FILE = None
+MASTER_DB_FILE = None
+possible_names = ['REC_CONS_MASTER.csv', 'rec_cons_master.csv', 'Rec_Cons_Master.csv']
+for name in possible_names:
+    if os.path.exists(name):
+        MASTER_DB_FILE = name
+        break
 
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
@@ -86,13 +86,17 @@ def normalize_text(text):
 
 @st.cache_data(show_spinner=False)
 def load_lookup():
+    """Load coach database safely on demand."""
+    df = None
     try:
+        # 1. Try Google Sheet
         try:
             r = requests.get(GOOGLE_SHEET_CSV_URL, timeout=5)
             if r.ok:
                 df = pd.read_csv(io.BytesIO(r.content), encoding='utf-8')
-        except: df = None
+        except: pass
         
+        # 2. Try Local File
         if (df is None or df.empty) and MASTER_DB_FILE:
             try: df = pd.read_csv(MASTER_DB_FILE, encoding='utf-8')
             except: df = pd.read_csv(MASTER_DB_FILE, encoding='latin1')
@@ -100,6 +104,7 @@ def load_lookup():
         if df is None or df.empty: return {}, {}
 
         lookup, name_lookup = {}, {}
+        # Normalize columns to lowercase for safer matching
         col_map = {str(c).strip().lower(): c for c in df.columns}
         
         def get_val(row, *keys):
@@ -112,7 +117,10 @@ def load_lookup():
             first = get_val(row, 'first name', 'first')
             last = get_val(row, 'last name', 'last')
             email = get_val(row, 'email', 'email address')
-            twitter = get_val(row, 'twitter', 'x', 'twitter handle')
+            
+            # --- UPDATED: SPECIFICALLY LOOKING FOR "Individual's Twitter" ---
+            twitter = get_val(row, "individual's twitter", 'twitter', 'x', 'twitter handle')
+            
             title = get_val(row, 'title')
             
             if school and (first or last):
@@ -120,6 +128,7 @@ def load_lookup():
                 rec = {'email': email, 'twitter': twitter, 'title': title, 'school': school, 'name': full_name}
                 s_key = normalize_text(school)
                 n_key = normalize_text(full_name)
+                
                 lookup[(s_key, n_key)] = rec
                 if n_key not in name_lookup: name_lookup[n_key] = []
                 name_lookup[n_key].append(rec)
@@ -155,7 +164,6 @@ def parse_header(bio):
     return extracted
 
 def get_snippet(text, keyword):
-    # Get snippet, but STRIP newlines so Excel rows stay short
     m = re.search(re.escape(keyword), str(text), re.IGNORECASE)
     if m: 
         s, e = max(0, m.start()-50), min(len(text), m.end()+50)
@@ -170,9 +178,16 @@ with col2:
         keywords_str = st.text_input("", placeholder="🔍 Search Database (e.g., Atlanta)")
         submit_button = st.form_submit_button(label='Search')
 
+# Initialize session state for persistence
+if 'search_results' not in st.session_state:
+    st.session_state['search_results'] = pd.DataFrame()
+if 'last_keywords' not in st.session_state:
+    st.session_state['last_keywords'] = ""
+
 if submit_button and keywords_str:
     keywords = [k.strip() for k in keywords_str.split(',') if k.strip()]
     pattern = '|'.join([re.escape(k) for k in keywords])
+    st.session_state['last_keywords'] = keywords_str
     
     chunk_files = glob.glob("chunk_*.csv")
     chunk_files.sort()
@@ -210,7 +225,8 @@ if submit_button and keywords_str:
                             'School': match.get('school') or meta['School'],
                             'Email': match.get('email', ''),
                             'Twitter': match.get('twitter', ''),
-                            'Context': get_snippet(row['Full_Bio'], keywords[0])
+                            'Context': get_snippet(row['Full_Bio'], keywords[0]),
+                            'Full_Bio': row['Full_Bio'] # Kept for export, hidden in UI
                         })
                 
                 del df_chunk
@@ -221,27 +237,40 @@ if submit_button and keywords_str:
         progress_bar.empty()
 
         if results_found:
-            final_df = pd.DataFrame(results_found).drop_duplicates(subset=['Name', 'School'])
-            
-            # --- SORTING LOGIC ---
-            # Sort by Role (Coach/Staff comes before Player) then Name
-            final_df.sort_values(by=['Role', 'Name'], ascending=[True, True], inplace=True)
-            
-            st.success(f"🎉 Found {len(final_df)} matches.")
-            st.dataframe(final_df, use_container_width=True, hide_index=True)
-            
-            safe_kw = re.sub(r'[^a-zA-Z0-9]', '_', keywords_str[:20])
-            file_name_dynamic = f"Search_{safe_kw}_{datetime.now().date()}.xlsx"
-            
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                final_df.to_excel(writer, index=False, sheet_name="Results")
-            
-            st.download_button(
-                label="💾 DOWNLOAD EXCEL",
-                data=buffer.getvalue(),
-                file_name=file_name_dynamic,
-                mime="application/vnd.ms-excel"
-            )
+            df_res = pd.DataFrame(results_found).drop_duplicates(subset=['Name', 'School'])
+            df_res.sort_values(by=['Role', 'Name'], ascending=[True, True], inplace=True)
+            st.session_state['search_results'] = df_res
         else:
+            st.session_state['search_results'] = pd.DataFrame()
             st.warning("No matches found.")
+
+# Display Logic (Outside form so it persists)
+if not st.session_state['search_results'].empty:
+    final_df = st.session_state['search_results']
+    
+    st.success(f"🎉 Found {len(final_df)} matches.")
+    
+    # Show table WITHOUT Full_Bio
+    st.dataframe(
+        final_df, 
+        column_config={
+            "Full_Bio": None 
+        },
+        use_container_width=True, 
+        hide_index=True
+    )
+    
+    # Download Button (WITH Full_Bio)
+    safe_kw = re.sub(r'[^a-zA-Z0-9]', '_', st.session_state['last_keywords'][:20])
+    file_name_dynamic = f"Search_{safe_kw}_{datetime.now().date()}.xlsx"
+    
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+        final_df.to_excel(writer, index=False, sheet_name="Results")
+    
+    st.download_button(
+        label="💾 DOWNLOAD EXCEL",
+        data=buffer.getvalue(),
+        file_name=file_name_dynamic,
+        mime="application/vnd.ms-excel"
+    )
