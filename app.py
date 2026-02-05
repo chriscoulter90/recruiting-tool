@@ -9,7 +9,6 @@ import requests
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="Recruiting Search", page_icon="🏈", layout="wide")
 
-# Clean UI: Hide technical footer/header
 st.markdown("""
     <style>
     header {visibility: hidden;}
@@ -24,7 +23,7 @@ st.title("🏈 Recruiting Search Engine")
 MASTER_DB_FILE = 'REC_CONS_MASTER.csv' 
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
-# Phrases that ruin column alignment - WE KILL THESE FIRST
+# Garbage phrases to strip out
 GARBAGE_PHRASES = [
     "Official Athletics Website", "Official Website", "Composite", 
     "Javascript is required", "Skip To Main Content", "Official Football Roster"
@@ -72,18 +71,15 @@ if "master_data" not in st.session_state:
 
 master_lookup, name_lookup = st.session_state["master_data"]
 
-# --- 4. SMART PARSER (The Fix) ---
+# --- 4. SMART PARSER ---
 def parse_header_smart(bio):
-    """
-    Parses 'Name - Title - School' line. 
-    Crucial Fix: Removes 'Official Website' garbage so Title/School line up correctly.
-    """
     extracted = {'Name': None, 'Title': None, 'School': None, 'Role': 'COACH/STAFF'}
     
-    # Clean and split lines
-    lines = [L.strip() for L in str(bio).replace('\r', '\n').split('\n') if L.strip()]
+    # Flatten bio to single line for easier searching
+    clean_bio_text = str(bio).replace('\n', ' ').replace('\r', ' ')
     
-    # Find the header (Line with " - " separators)
+    # Try to find header line in original formatting
+    lines = [L.strip() for L in str(bio).replace('\r', '\n').split('\n') if L.strip()]
     header = None
     for line in lines[:6]:
         if " - " in line and "http" not in line and "SOURCE" not in line:
@@ -91,48 +87,37 @@ def parse_header_smart(bio):
             break
             
     if header:
-        # Split by separator
         parts = [p.strip() for p in header.split(' - ')]
-        
-        # REMOVE GARBAGE PARTS (This fixes the alignment!)
         clean_parts = []
         for p in parts:
             is_garbage = False
             for g in GARBAGE_PHRASES:
-                if g.lower() in p.lower():
-                    is_garbage = True
-            if not is_garbage:
-                clean_parts.append(p)
+                if g.lower() in p.lower(): is_garbage = True
+            if not is_garbage: clean_parts.append(p)
         
-        # ASSIGN COLUMNS BASED ON COUNT
         if len(clean_parts) >= 3:
-            # Pattern: Name | Title | School
             extracted['Name'] = clean_parts[0]
             extracted['Title'] = clean_parts[1]
             extracted['School'] = clean_parts[2]
-            
         elif len(clean_parts) == 2:
-            # Pattern: Name | School (Title is missing)
             extracted['Name'] = clean_parts[0]
             extracted['School'] = clean_parts[1]
-            extracted['Title'] = "Staff" # Default
-            
+            extracted['Title'] = "Staff"
         elif len(clean_parts) == 1:
             extracted['Name'] = clean_parts[0]
 
-        # REPAIR: If Title looks like a School, swap them
+        # Fix Titles/Schools swaps
         if extracted['Title'] and "University" in extracted['Title']:
             temp = extracted['School']
             extracted['School'] = extracted['Title']
             extracted['Title'] = temp if temp else "Staff"
 
-        # REPAIR: Player Detection
-        # If "2025" or "Football" ends up in Title/School, it's a player
+        # Player Detection
         for val in [str(extracted['Title']), str(extracted['School'])]:
-            if "202" in val or "203" in val: # 2024, 2025...
+            if "202" in val or "203" in val:
                 extracted['Role'] = "PLAYER"
                 extracted['Title'] = "Roster Member"
-
+                
     return extracted
 
 def get_snippet(text, keyword):
@@ -159,7 +144,6 @@ if st.button("Run Search") or keywords_str:
         if not chunk_files:
             st.error("System Error: No database files found.")
         else:
-            # Sort files
             try: chunk_files.sort(key=lambda x: int(re.search(r'\d+', x).group()))
             except: pass
             
@@ -170,14 +154,12 @@ if st.button("Run Search") or keywords_str:
                 progress_bar.progress((i + 1) / len(chunk_files))
                 
                 try:
-                    # Robust Read
                     df_iter = pd.read_csv(file, chunksize=1000, on_bad_lines='skip', dtype=str)
                     
                     for chunk in df_iter:
                         chunk.fillna("", inplace=True)
                         chunk.columns = [c.strip() for c in chunk.columns]
                         
-                        # Normalize Columns
                         col_map = {}
                         for c in chunk.columns:
                             if c.lower() in ['bio', 'full_bio', 'description', 'full bio']: col_map[c] = 'Full_Bio'
@@ -188,36 +170,26 @@ if st.button("Run Search") or keywords_str:
                         
                         if 'Full_Bio' not in chunk.columns: continue
                         
-                        # Search
                         mask = chunk['Full_Bio'].str.contains('|'.join(keywords), case=False, na=False)
                         if mask.any():
                             found = chunk[mask].copy()
                             
-                            # --- ENRICHMENT LOOP ---
                             def clean_and_fill(row):
-                                # 1. Parse Header
                                 meta = parse_header_smart(row['Full_Bio'])
-                                
-                                # 2. Fill Blanks
                                 name = row.get('Name', '')
-                                if not name or name == "Unknown" or len(name) < 3:
-                                    name = meta['Name'] if meta['Name'] else name
+                                if not name or name == "Unknown" or len(name) < 3: name = meta['Name'] if meta['Name'] else name
                                 
                                 school = row.get('School', '')
-                                if not school or school == "Unknown":
-                                    school = meta['School'] if meta['School'] else school
+                                if not school or school == "Unknown": school = meta['School'] if meta['School'] else school
                                     
                                 title = row.get('Title', '')
-                                if not title or title == "Unknown":
-                                    title = meta['Title'] if meta['Title'] else title
+                                if not title or title == "Unknown": title = meta['Title'] if meta['Title'] else title
                                 
                                 role = meta['Role']
 
-                                # 3. Master Lookup
+                                # Master Lookup
                                 def n(t): return re.sub(r'[^a-z0-9]', '', str(t).lower())
                                 match = master_lookup.get((n(school), n(name)))
-                                
-                                # Backup: Fuzzy Name Lookup
                                 if not match:
                                     candidates = name_lookup.get(n(name), [])
                                     if len(candidates) == 1: match = candidates[0]
@@ -231,20 +203,19 @@ if st.button("Run Search") or keywords_str:
                                     if title in ["Staff", "Unknown", "Football"]: title = match['title']
                                     school = match['school']
                                 
-                                return pd.Series([role, name, title, school, email, twitter, row['Full_Bio']])
+                                # Flatten Bio to prevent massive rows
+                                flat_bio = str(row['Full_Bio']).replace('\n', ' ').replace('\r', ' ')
+                                flat_bio = re.sub(r'\s+', ' ', flat_bio).strip()
+                                
+                                return pd.Series([role, name, title, school, email, twitter, flat_bio])
 
-                            # Apply enrichment
                             enriched = found.apply(clean_and_fill, axis=1)
                             enriched.columns = ['Role', 'Name', 'Title', 'School', 'Email', 'Twitter', 'Full_Bio']
-                            
-                            # Snippet
                             enriched['Context_Snippet'] = enriched['Full_Bio'].apply(lambda x: get_snippet(x, keywords[0]))
-                            
                             results.append(enriched)
                             
                     del chunk
                     gc.collect()
-                    
                 except: continue
 
             progress_bar.empty()
@@ -252,25 +223,33 @@ if st.button("Run Search") or keywords_str:
             if results:
                 final_df = pd.concat(results)
                 
-                # --- FINAL SORT & LAYOUT ---
-                # 1. Clean Garbage Rows
+                # 1. Clean Garbage
                 final_df = final_df[~final_df['Name'].str.contains("Skip To|Official|Javascript", case=False, na=False)]
                 final_df.dropna(subset=['Name'], inplace=True)
                 
-                # 2. Sort: School -> Role -> Name
-                final_df.sort_values(by=['School', 'Role', 'Name'], ascending=[True, True, True], inplace=True)
-                
-                # 3. Exact Column Order
+                # 2. SORTING: Role -> School -> Name
+                # To make Coaches appear before Players, we can map them
+                final_df['Role_Sort'] = final_df['Role'].apply(lambda x: 0 if "COACH" in str(x).upper() else 1)
+                final_df.sort_values(by=['Role_Sort', 'School', 'Name'], ascending=[True, True, True], inplace=True)
+                final_df.drop(columns=['Role_Sort'], inplace=True)
+
+                # 3. Final Columns
                 cols = ['Role', 'Name', 'Title', 'School', 'Email', 'Twitter', 'Context_Snippet', 'Full_Bio']
                 final_df = final_df[cols]
                 
                 st.success(f"🎉 Found {len(final_df)} matches.")
                 st.dataframe(final_df)
                 
-                # Excel
+                # Excel Export with Fixed Row Heights
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     final_df.to_excel(writer, index=False, sheet_name="Results")
+                    workbook = writer.book
+                    worksheet = writer.sheets["Results"]
+                    # Format: No text wrap to keep rows small
+                    cell_format = workbook.add_format({'text_wrap': False, 'valign': 'top'})
+                    worksheet.set_column('A:H', 20, cell_format)
+                    
                 st.download_button("💾 Download Results (Excel)", buffer.getvalue(), "Search_Results.xlsx", "application/vnd.ms-excel")
             else:
                 st.warning("No matches found.")
