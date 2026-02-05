@@ -14,6 +14,7 @@ st.set_page_config(page_title="Coulter Recruiting", page_icon="🏈", layout="wi
 
 st.markdown("""
     <style>
+    /* Global Font */
     html, body, [class*="css"] {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         background-color: #F5F5F7; 
@@ -23,6 +24,7 @@ st.markdown("""
     footer {visibility: hidden;}
     .block-container {padding-top: 2rem;}
 
+    /* HEADER: Red & Black Gradient */
     .header-container {
         background: linear-gradient(135deg, #8B0000 0%, #1A1A1A 100%);
         padding: 45px;
@@ -51,6 +53,7 @@ st.markdown("""
         letter-spacing: 3px; 
     }
 
+    /* INPUT FIELD */
     .stTextInput > div > div > input {
         border-radius: 8px; border: 2px solid #E0E0E0; padding: 15px 20px; font-size: 18px; 
         color: #333; background-color: #FFF; transition: all 0.3s ease;
@@ -59,6 +62,7 @@ st.markdown("""
         border-color: #8B0000; box-shadow: 0 0 0 3px rgba(139, 0, 0, 0.1);
     }
 
+    /* BUTTON: Red Gradient */
     .stButton > button {
         background: linear-gradient(90deg, #B22222 0%, #800000 100%);
         color: white; border-radius: 8px; padding: 15px 30px; font-weight: 700; 
@@ -107,9 +111,9 @@ GARBAGE_PHRASES = [
     "View Full Profile", "Related Headlines", "Source:", "https://"
 ]
 
-# POISON PILLS: If these appear, DELETE the row immediately.
-POISON_PILLS = [
-    "Flag Football", "Women's Flag", "Volleyball", "Baseball", "Softball", 
+# POISON PILLS: If these appear in TITLE or SCHOOL, DELETE the row.
+POISON_PILLS_HEADER = [
+    "Flag", "Women's Flag", "Volleyball", "Baseball", "Softball", 
     "Soccer", "Tennis", "Golf", "Swimming", "Lacrosse", "Hockey", 
     "Wrestling", "Gymnastics", "Basketball", "Track & Field", "Crew", 
     "Rowing", "Sailing", "Cheerleading", "Fencing", "Spirit Squad"
@@ -189,22 +193,35 @@ def load_lookup():
         if not os.path.exists(MASTER_DB_FILE):
             r = requests.get(GOOGLE_SHEET_CSV_URL, timeout=5)
             with open(MASTER_DB_FILE, 'wb') as f: f.write(r.content)
+        
         try: df = pd.read_csv(MASTER_DB_FILE, encoding='utf-8')
         except: df = pd.read_csv(MASTER_DB_FILE, encoding='latin1')
+        
         lookup, name_lookup = {}, {}
-        email_col = next((c for c in df.columns if 'Email' in c), None)
-        twitter_col = next((c for c in df.columns if 'Twitter' in c), None)
-        title_col = next((c for c in df.columns if 'Title' in c), None)
+        cols = df.columns
+        email_col = next((c for c in cols if 'Email' in c), None)
+        twitter_col = next((c for c in cols if 'Twitter' in c), None)
+        title_col = next((c for c in cols if 'Title' in c), None)
+        
         for _, row in df.iterrows():
             s_raw = str(row.get('School', '')).strip()
-            s_key, n_key = normalize_text(s_raw), normalize_text(f"{row.get('First name', '')}{row.get('Last name', '')}")
+            s_key = normalize_text(s_raw)
+            n_key = normalize_text(f"{row.get('First name', '')}{row.get('Last name', '')}")
+            
             if n_key:
-                rec = {'email': str(row.get(email_col, '')).strip() if email_col else "", 'twitter': str(row.get(twitter_col, '')).strip() if twitter_col else "", 'title': str(row.get(title_col, '')).strip() if title_col else "", 'school': s_raw}
+                rec = {
+                    'email': str(row.get(email_col, '')).strip() if email_col else "",
+                    'twitter': str(row.get(twitter_col, '')).strip() if twitter_col else "",
+                    'title': str(row.get(title_col, '')).strip() if title_col else "",
+                    'school': s_raw 
+                }
                 lookup[(s_key, n_key)] = rec
                 for alias, real_name in SCHOOL_ALIASES.items():
-                    if s_raw == real_name: lookup[(normalize_text(alias), n_key)] = rec
+                    if s_raw == real_name:
+                         lookup[(normalize_text(alias), n_key)] = rec
                 if n_key not in name_lookup: name_lookup[n_key] = []
                 name_lookup[n_key].append(rec)
+                
         return lookup, name_lookup
     except: return {}, {}
 
@@ -226,22 +243,26 @@ def detect_sport_context(bio):
     text = str(bio)
     analysis_text = text[200:].lower() if len(text) > 500 else text.lower()
     
-    # 1. POISON PILL CHECK (Nuclear Option)
-    for poison in POISON_PILLS:
-        if poison.lower() in analysis_text[:1000]: return poison # Reject immediately
+    # NOTE: NO POISON PILL HERE. Only check header for poison.
+    # Just check context weights.
 
     fb_score = sum(analysis_text.count(w) for w in FOOTBALL_INDICATORS)
     max_other_score = 0
     likely_other_sport = None
+    
     for sport, keywords in NON_FOOTBALL_INDICATORS.items():
         score = sum(analysis_text.count(w) for w in keywords)
         if score > max_other_score:
             max_other_score = score
             likely_other_sport = sport
 
-    if fb_score >= max_other_score and max_other_score < 3: return "Football"
-    elif max_other_score > fb_score: return likely_other_sport
-    else: return "Football" if "football" in text[:300].lower() else "Uncertain"
+    # Decision Logic: Bias towards Football if present
+    if fb_score > 0: return "Football"
+    
+    if max_other_score > 2: return likely_other_sport
+    
+    # If uncertain but header has football, it's football
+    return "Football" if "football" in text[:300].lower() else "Uncertain"
 
 def detect_player_by_context(bio, title):
     text = str(bio).lower()[:800]
@@ -266,6 +287,7 @@ def parse_header_smart(bio):
     
     clean_text = str(bio).replace('\r', '\n').replace('–', '-').replace('—', '-')
     lines = [L.strip() for L in clean_text.split('\n') if L.strip()]
+    
     header = None
     for line in lines[:8]:
         if " - " in line and "http" not in line and "SOURCE" not in line:
@@ -341,19 +363,21 @@ if run_search or keywords_str:
                                 if any(bad.lower() in str(name).lower() for bad in BAD_NAMES): return None
                                 if len(str(name)) > 40: return None
                                 
-                                # 2. Strict Poison Pill Check (Flag Football, Volleyball etc)
+                                # 2. Strict HEADER Poison Pill (No Bio Check)
                                 title = row.get('Title', '')
                                 if not title or title == "Unknown": title = meta['Title'] or title
                                 school = row.get('School', '')
                                 if not school or school == "Unknown": school = meta['School'] or school
                                 
-                                full_check = (str(title) + " " + str(school) + " " + str(row['Full_Bio'])[:800]).lower()
-                                for poison in POISON_PILLS:
-                                    if poison.lower() in full_check: return None
+                                # ONLY CHECK TITLE AND SCHOOL FOR POISON
+                                header_check = (str(title) + " " + str(school)).lower()
+                                for poison in POISON_PILLS_HEADER:
+                                    if poison.lower() in header_check: return None
 
-                                # 3. Sport Siphon
+                                # 3. Sport Siphon (Soft Context Check)
                                 detected_sport = detect_sport_context(row['Full_Bio'])
-                                if detected_sport != "Football": return None 
+                                if detected_sport != "Football" and detected_sport != "Uncertain":
+                                    return None 
 
                                 role = meta['Role']
                                 if role == "COACH/STAFF":
@@ -401,7 +425,7 @@ if run_search or keywords_str:
                 final_df = final_df[~final_df['Name'].str.contains("Skip To|Official|Javascript", case=False, na=False)]
                 final_df.dropna(subset=['Name'], inplace=True)
                 
-                # Deduplication Step
+                # DEDUPLICATION (Keep First)
                 final_df.drop_duplicates(subset=['Name', 'School'], inplace=True)
 
                 final_df['Role_Sort'] = final_df['Role'].apply(lambda x: 1 if "PLAYER" in str(x).upper() else 0)
