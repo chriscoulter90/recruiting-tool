@@ -82,10 +82,12 @@ st.markdown("""
 MASTER_DB_FILE = 'REC_CONS_MASTER.csv' 
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
+# A. CONTEXT SCORING
 FOOTBALL_INDICATORS = [
     "football", "quarterback", "linebacker", "touchdown", "nfl", "bowl", 
     "offensive", "defensive", "special teams", "recruiting", "fbs", "fcs",
-    "interception", "tackle", "gridiron", "playoff", "super bowl", "pro bowl"
+    "interception", "tackle", "gridiron", "playoff", "super bowl", "pro bowl",
+    "coaching staff", "head coach", "coordinator"
 ]
 
 NON_FOOTBALL_INDICATORS = {
@@ -105,19 +107,25 @@ GARBAGE_PHRASES = [
     "View Full Profile", "Related Headlines", "Source:", "https://"
 ]
 
-# POISON PILLS: STRICTLY FOR HEADER CHECK (Title/School)
-POISON_PILLS_HEADER = [
-    "Flag", "Women's Flag", "Volleyball", "Baseball", "Softball", 
-    "Soccer", "Tennis", "Golf", "Swimming", "Lacrosse", "Hockey", 
-    "Wrestling", "Gymnastics", "Basketball", "Track & Field", "Crew", 
-    "Rowing", "Sailing", "Cheerleading", "Fencing", "Spirit Squad"
+# HARD KILL WORDS (Anywhere in text)
+# "Flag Football" is safe to kill globally. "Basketball" is NOT safe to kill globally (context matters).
+NUCLEAR_POISON_PILLS = [
+    "Flag Football", "Women's Flag", "Beach Volleyball", "Sand Volleyball"
+]
+
+# HEADER POISON PILLS (Only check Name/Title/School)
+HEADER_POISON_PILLS = [
+    "Volleyball", "Baseball", "Softball", "Soccer", "Tennis", "Golf", 
+    "Swimming", "Lacrosse", "Hockey", "Wrestling", "Gymnastics", 
+    "Basketball", "Track & Field", "Crew", "Rowing", "Sailing", 
+    "Cheerleading", "Fencing", "Spirit Squad"
 ]
 
 BAD_NAMES = [
     "Football Roster", "Football Schedule", "Men's Basketball", "Women's Basketball", 
     "Composite Schedule", "Game Recap", "Box Score", "Statistic", "Menu", "Search",
     "Tickets", "Donate", "Camps", "Facilities", "Staff Directory", "2024", "2025", "2026",
-    "Privacy Policy", "Terms of Service", "Accessibility", "Ad Blocker"
+    "Privacy Policy", "Terms of Service", "Accessibility", "Ad Blocker", "View Bio"
 ]
 
 JOB_TITLES = [
@@ -221,8 +229,11 @@ def detect_sport_context(bio):
     if pd.isna(bio): return "Uncertain"
     text = str(bio)
     
-    # NEW FIX: IGNORE THE MENU!
-    # Only analyze text AFTER the first 500 characters to skip nav bars
+    # 1. NUCLEAR POISON CHECK (Global - Deletes "Flag Football" instantly)
+    for poison in NUCLEAR_POISON_PILLS:
+        if poison.lower() in text.lower(): return None
+
+    # 2. Score Context (Skip Menu ~500 chars)
     analysis_text = text[500:].lower() if len(text) > 800 else text.lower()
 
     fb_score = sum(analysis_text.count(w) for w in FOOTBALL_INDICATORS)
@@ -235,24 +246,34 @@ def detect_sport_context(bio):
             max_other_score = score
             likely_other_sport = sport
 
-    if fb_score > 0: return "Football"
-    if max_other_score > 2: return likely_other_sport
+    # Decision Rule
+    if fb_score >= 1: return "Football"
+    if max_other_score > 2 and max_other_score > fb_score: return likely_other_sport
+    
+    # Fallback to header text
     return "Football" if "football" in text[:300].lower() else "Uncertain"
 
 def detect_player_by_context(bio, title):
-    text = str(bio).lower()[:1500] 
+    text = str(bio).lower()[:2000] # Deep scan
+    
+    # Indicators
     if any(x in str(title).lower() for x in ["roster", "football", "athlete", "player"]): return True
     if any(x in text for x in ["freshman", "sophomore", "junior", "senior", "redshirt", "class of 20"]): return True
-    if re.search(r"\d['’]-?\d+\"?\s+\d{2,3}\s?lbs", text): return True
-    if re.search(r"\b(qb|wr|rb|te|ol|dl|lb|db|saf|cb|pk|p|ls)\b", text) and ("hometown" in text or "high school" in text): return True
-    if "punt" in text or "kick" in text or "rushing" in text or "tackle" in text or "yards" in text:
+    if "son of" in text or "daughter of" in text: return True
+    if "hometown:" in text or "major:" in text: return True
+    
+    # Stats triggers
+    if "yards" in text or "tackles" in text or "punts" in text or "kicks" in text:
         if "coach" not in str(title).lower(): return True
+        
     return False
 
 def extract_title_from_text(bio):
-    bio_intro = str(bio)[:500] 
+    # Scan first 1000 chars for phrases like "Hired as [Title]"
+    text = str(bio)[:1000]
     for title in JOB_TITLES:
-        if re.search(r"\b" + re.escape(title) + r"\b", bio_intro, re.IGNORECASE): return title
+        if re.search(r"\b" + re.escape(title) + r"\b", text, re.IGNORECASE):
+            return title
     return "Staff"
 
 def parse_header_smart(bio):
@@ -294,13 +315,13 @@ def get_snippet(text, keyword):
     if m: s, e = max(0, m.start()-60), min(len(clean), m.end()+60); return f"...{clean[s:e].strip()}..."
     return f"...{clean[:100]}..."
 
-# --- 4. SESSION STATE SEARCH (The "Click to Run" Fix) ---
+# --- 4. SESSION STATE SEARCH ---
 if 'search_results' not in st.session_state:
     st.session_state.search_results = None
 if 'search_filename' not in st.session_state:
     st.session_state.search_filename = None
 
-# --- 5. SEARCH INTERFACE (FORM) ---
+# --- 5. SEARCH INTERFACE ---
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     with st.form(key='search_form'):
@@ -345,23 +366,26 @@ if submit_button:
                             found = chunk[mask].copy()
                             
                             def enrich_row(row):
+                                # 1. Parse
                                 meta = parse_header_smart(row['Full_Bio'])
                                 name = row.get('Name', '')
                                 if not name or name == "Unknown" or len(name) < 3: name = meta['Name'] or name
+                                
+                                # 2. Basic Filters
                                 if any(bad.lower() in str(name).lower() for bad in BAD_NAMES): return None
                                 if len(str(name)) > 40: return None
                                 
-                                # HEADER POISON CHECK (Strict)
+                                # 3. Header Poison Check
                                 title = row.get('Title', '')
                                 if not title or title == "Unknown": title = meta['Title'] or title
                                 school = row.get('School', '')
                                 if not school or school == "Unknown": school = meta['School'] or school
                                 
                                 header_check = (str(title) + " " + str(school)).lower()
-                                for poison in POISON_PILLS_HEADER:
+                                for poison in HEADER_POISON_PILLS:
                                     if poison.lower() in header_check: return None
 
-                                # SPORT SIPHON
+                                # 4. Deep Sport Context Check
                                 detected_sport = detect_sport_context(row['Full_Bio'])
                                 if detected_sport != "Football" and detected_sport != "Uncertain": return None 
 
@@ -369,6 +393,7 @@ if submit_button:
                                 if role == "COACH/STAFF":
                                     if detect_player_by_context(row['Full_Bio'], title):
                                         role = "PLAYER"; title = "Roster Member"
+                                        # Force overwrite if title was generic
                                         if "football" in str(title).lower(): title = "Roster Member"
 
                                 if title == "Staff" or title == "Unknown":
@@ -425,7 +450,7 @@ if submit_button:
                 st.session_state.search_results = None
                 st.warning("No matches found.")
 
-# --- 6. DISPLAY RESULTS (FROM SESSION STATE) ---
+# --- 6. DISPLAY ---
 if st.session_state.search_results is not None:
     st.success(f"🎉 Found {len(st.session_state.search_results)} matches.")
     st.dataframe(st.session_state.search_results, use_container_width=True)
