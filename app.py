@@ -86,7 +86,6 @@ def normalize_text(text):
 
 @st.cache_data(show_spinner=False)
 def load_lookup():
-    """Load coach database safely on demand."""
     try:
         try:
             r = requests.get(GOOGLE_SHEET_CSV_URL, timeout=5)
@@ -156,11 +155,13 @@ def parse_header(bio):
     return extracted
 
 def get_snippet(text, keyword):
+    # Get snippet, but STRIP newlines so Excel rows stay short
     m = re.search(re.escape(keyword), str(text), re.IGNORECASE)
     if m: 
-        s, e = max(0, m.start()-60), min(len(text), m.end()+60)
-        return f"...{text[s:e]}..."
-    return text[:150] + "..."
+        s, e = max(0, m.start()-50), min(len(text), m.end()+50)
+        raw = text[s:e]
+        return f"...{raw.replace(chr(10), ' ').replace(chr(13), ' ')}..."
+    return text[:100].replace(chr(10), ' ').replace(chr(13), ' ') + "..."
 
 # --- 4. SEARCH LOGIC ---
 col1, col2, col3 = st.columns([1, 2, 1])
@@ -184,7 +185,6 @@ if submit_button and keywords_str:
         
         for i, file in enumerate(chunk_files):
             try:
-                # Load only required columns (Full_Bio) to save memory
                 df_chunk = pd.read_csv(file, usecols=['Full_Bio'], dtype=str, on_bad_lines='skip').fillna("")
                 mask = df_chunk['Full_Bio'].str.contains(pattern, case=False, na=False, regex=True)
                 
@@ -210,8 +210,7 @@ if submit_button and keywords_str:
                             'School': match.get('school') or meta['School'],
                             'Email': match.get('email', ''),
                             'Twitter': match.get('twitter', ''),
-                            'Context': get_snippet(row['Full_Bio'], keywords[0]),
-                            # Removed Full_Bio from this list so it never touches the Excel file
+                            'Context': get_snippet(row['Full_Bio'], keywords[0])
                         })
                 
                 del df_chunk
@@ -223,10 +222,14 @@ if submit_button and keywords_str:
 
         if results_found:
             final_df = pd.DataFrame(results_found).drop_duplicates(subset=['Name', 'School'])
+            
+            # --- SORTING LOGIC ---
+            # Sort by Role (Coach/Staff comes before Player) then Name
+            final_df.sort_values(by=['Role', 'Name'], ascending=[True, True], inplace=True)
+            
             st.success(f"🎉 Found {len(final_df)} matches.")
             st.dataframe(final_df, use_container_width=True, hide_index=True)
             
-            # Dynamic Filename
             safe_kw = re.sub(r'[^a-zA-Z0-9]', '_', keywords_str[:20])
             file_name_dynamic = f"Search_{safe_kw}_{datetime.now().date()}.xlsx"
             
