@@ -103,25 +103,36 @@ def load_lookup():
             
         if df is None or df.empty: return {}, {}
 
-        lookup, name_lookup = {}, {}
-        # Normalize columns to lowercase for safer matching
-        col_map = {str(c).strip().lower(): c for c in df.columns}
+        # --- SMART COLUMN DETECTION ---
+        cols_lower = {c.lower().strip(): c for c in df.columns}
         
-        def get_val(row, *keys):
-            for k in keys:
-                if k.lower() in col_map: return str(row[col_map[k.lower()]]).strip()
-            return ""
+        def find_col(*keywords):
+            for k in keywords:
+                if k in cols_lower: return cols_lower[k]
+                for actual_col in cols_lower:
+                    if k in actual_col: return cols_lower[actual_col]
+            return None
+
+        col_school = find_col('school', 'institution')
+        col_first = find_col('first name', 'first')
+        col_last = find_col('last name', 'last')
+        col_email = find_col('email', 'e-mail')
+        col_twitter = find_col("individual's twitter", 'twitter', 'social', 'x.com')
+        col_title = find_col('title', 'position')
+
+        lookup, name_lookup = {}, {}
 
         for _, row in df.iterrows():
-            school = get_val(row, 'school')
-            first = get_val(row, 'first name', 'first')
-            last = get_val(row, 'last name', 'last')
-            email = get_val(row, 'email', 'email address')
-            twitter = get_val(row, "individual's twitter", 'twitter', 'x', 'twitter handle')
-            title = get_val(row, 'title')
+            school = str(row[col_school]).strip() if col_school and pd.notna(row[col_school]) else ""
+            first = str(row[col_first]).strip() if col_first and pd.notna(row[col_first]) else ""
+            last = str(row[col_last]).strip() if col_last and pd.notna(row[col_last]) else ""
             
             if school and (first or last):
                 full_name = f"{first} {last}".strip()
+                email = str(row[col_email]).strip() if col_email and pd.notna(row[col_email]) else ""
+                twitter = str(row[col_twitter]).strip() if col_twitter and pd.notna(row[col_twitter]) else ""
+                title = str(row[col_title]).strip() if col_title and pd.notna(row[col_title]) else ""
+                
                 rec = {'email': email, 'twitter': twitter, 'title': title, 'school': school, 'name': full_name}
                 s_key = normalize_text(school)
                 n_key = normalize_text(full_name)
@@ -130,7 +141,9 @@ def load_lookup():
                 if n_key not in name_lookup: name_lookup[n_key] = []
                 name_lookup[n_key].append(rec)
         return lookup, name_lookup
-    except: return {}, {}
+    except Exception as e:
+        print(f"DB Load Error: {e}")
+        return {}, {}
 
 if "master_data" not in st.session_state:
     st.session_state["master_data"] = load_lookup()
@@ -161,7 +174,6 @@ def parse_header(bio):
     return extracted
 
 def get_snippet(text, keyword):
-    # Flatten text to avoid massive rows
     clean_text = str(text).replace(chr(10), ' ').replace(chr(13), ' ')
     m = re.search(re.escape(keyword), clean_text, re.IGNORECASE)
     if m: 
@@ -176,7 +188,6 @@ with col2:
         keywords_str = st.text_input("", placeholder="🔍 Search Database (e.g., Atlanta)")
         submit_button = st.form_submit_button(label='Search')
 
-# Initialize session state for persistence
 if 'search_results' not in st.session_state:
     st.session_state['search_results'] = pd.DataFrame()
 if 'last_keywords' not in st.session_state:
@@ -224,7 +235,7 @@ if submit_button and keywords_str:
                             'Email': match.get('email', ''),
                             'Twitter': match.get('twitter', ''),
                             'Context': get_snippet(row['Full_Bio'], keywords[0]),
-                            'Full_Bio': row['Full_Bio'] # Kept for export
+                            'Full_Bio': row['Full_Bio']
                         })
                 
                 del df_chunk
@@ -236,50 +247,32 @@ if submit_button and keywords_str:
 
         if results_found:
             df_res = pd.DataFrame(results_found).drop_duplicates(subset=['Name', 'School'])
-            
-            # --- FLATTEN FULL BIO ---
+            # Flatten rows
             df_res['Full_Bio'] = df_res['Full_Bio'].astype(str).str.replace(r'[\r\n]+', ' ', regex=True)
-            
-            # Sort by Role then Name
+            # Sort: Staff First
             df_res.sort_values(by=['Role', 'Name'], ascending=[True, True], inplace=True)
-            
             st.session_state['search_results'] = df_res
         else:
             st.session_state['search_results'] = pd.DataFrame()
             st.warning("No matches found.")
 
-# Display Logic (Outside form so it persists)
 if not st.session_state['search_results'].empty:
     final_df = st.session_state['search_results']
-    
     st.success(f"🎉 Found {len(final_df)} matches.")
     
-    # Show table WITHOUT Full_Bio
-    st.dataframe(
-        final_df, 
-        column_config={
-            "Full_Bio": None 
-        },
-        use_container_width=True, 
-        hide_index=True
-    )
+    st.dataframe(final_df, column_config={"Full_Bio": None}, use_container_width=True, hide_index=True)
     
-    # Download Button with Custom Column Widths
     safe_kw = re.sub(r'[^a-zA-Z0-9]', '_', st.session_state['last_keywords'][:20])
     file_name_dynamic = f"Search_{safe_kw}_{datetime.now().date()}.xlsx"
     
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         final_df.to_excel(writer, index=False, sheet_name="Results")
-        
-        # --- WIDEN COLUMNS ---
         worksheet = writer.sheets['Results']
-        # Set columns A through F (0 to 5) to width 30
-        worksheet.set_column(0, 5, 30)
+        
+        # --- CUSTOM COLUMN WIDTHS ---
+        worksheet.set_column(0, 0, 15)  # Role (Narrower)
+        worksheet.set_column(1, 5, 30)  # Name, Title, School, Email, Twitter (Wide)
+        worksheet.set_column(6, 6, 50)  # Context (Extra Wide)
     
-    st.download_button(
-        label="💾 DOWNLOAD EXCEL",
-        data=buffer.getvalue(),
-        file_name=file_name_dynamic,
-        mime="application/vnd.ms-excel"
-    )
+    st.download_button("💾 DOWNLOAD EXCEL", buffer.getvalue(), file_name_dynamic, "application/vnd.ms-excel")
