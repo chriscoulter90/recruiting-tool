@@ -33,15 +33,7 @@ st.markdown("""
     }
     .main-title { font-size: 3.2rem; font-weight: 700; color: #FFFFFF; margin: 0; letter-spacing: -1.5px; }
     .sub-title { font-size: 1.1rem; font-weight: 500; color: #8E8E93; margin-top: 8px; text-transform: uppercase; letter-spacing: 4px; }
-
-    /* FORM & BUTTONS */
-    .stTextInput > div > div > input {
-        border-radius: 20px; border: 1px solid #D1D1D6; padding: 18px 25px; font-size: 17px;
-    }
-    .stButton > button {
-        background: #000000; color: white; border-radius: 30px; padding: 12px 40px; font-weight: 600; border: none; width: auto; display: block; margin: 0 auto;
-    }
-    .stButton > button:hover { background: #333333; }
+    .instruction-text { text-align: center; color: #555; font-size: 1.1em; margin-bottom: 20px; }
 
     /* TABLE */
     .stDataFrame { background-color: white; border-radius: 20px; padding: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); }
@@ -55,9 +47,13 @@ st.markdown("""
     </div>
     """, unsafe_allow_html=True)
 
-# --- 2. CONSTANTS ---
+# --- 2. CONSTANTS & FILES ---
+# Aggressive file finder
 MASTER_DB_FILE = None
-possible_names = ['REC_CONS_MASTER.csv', 'rec_cons_master.csv', 'Rec_Cons_Master.csv']
+possible_names = [
+    'REC_CONS_MASTER.csv', 'rec_cons_master.csv', 'Rec_Cons_Master.csv', 
+    'Rec_Cons_Master .csv', 'REC_CONS_MASTER .csv' # Handle accidental spaces
+]
 for name in possible_names:
     if os.path.exists(name):
         MASTER_DB_FILE = name
@@ -65,7 +61,6 @@ for name in possible_names:
 
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
-# Keywords & Filters
 FOOTBALL_INDICATORS = ["football", "quarterback", "linebacker", "touchdown", "nfl", "bowl", "recruiting", "fbs", "fcs", "interception", "tackle", "gridiron"]
 NON_FOOTBALL_INDICATORS = {
     "Volleyball": ["volleyball", "set", "spike", "libero"], "Baseball": ["baseball", "inning", "homerun", "pitcher"],
@@ -74,80 +69,93 @@ NON_FOOTBALL_INDICATORS = {
 }
 POISON_PILLS_TEXT = ["Women's Flag", "Flag Football"]
 BAD_NAMES = ["Football Roster", "Football Schedule", "Composite Schedule", "Game Recap", "Menu", "Search", "Tickets"]
-SCHOOL_ALIASES = {"ASU": "Arizona State", "UCF": "Central Florida", "Ole Miss": "Mississippi", "FSU": "Florida State", "Miami": "Miami (FL)"}
+SCHOOL_ALIASES = {"ASU": "Arizona State", "UCF": "Central Florida", "Ole Miss": "Mississippi", "FSU": "Florida State", "Miami": "Miami (FL)", "UConn": "Connecticut"}
 
 # --- 3. HELPER FUNCTIONS ---
 def normalize_text(text):
     if pd.isna(text): return ""
     text = str(text).lower()
-    for word in ['university', 'univ', 'college', 'state', 'the', 'of', 'athletics', 'inst']:
+    # Remove common university words to improve matching (e.g. "Florida State Univ" == "Florida State")
+    for word in ['university', 'univ', 'college', 'state', 'the', 'of', 'athletics', 'inst', 'tech', 'a&m']:
         text = text.replace(word, '')
     return re.sub(r'[^a-z0-9]', '', text).strip()
 
 @st.cache_data(show_spinner=False)
 def load_lookup():
-    """Load coach database safely on demand."""
+    """Robustly load coach database."""
     df = None
+    source = "None"
+    
+    # 1. Try Google Sheet
     try:
-        # 1. Try Google Sheet
-        try:
-            r = requests.get(GOOGLE_SHEET_CSV_URL, timeout=5)
-            if r.ok:
-                df = pd.read_csv(io.BytesIO(r.content), encoding='utf-8')
-        except: pass
+        r = requests.get(GOOGLE_SHEET_CSV_URL, timeout=3)
+        if r.ok:
+            df = pd.read_csv(io.BytesIO(r.content), encoding='utf-8')
+            source = "Google Sheet"
+    except: pass
+    
+    # 2. Try Local File
+    if (df is None or df.empty) and MASTER_DB_FILE:
+        try: df = pd.read_csv(MASTER_DB_FILE, encoding='utf-8')
+        except: df = pd.read_csv(MASTER_DB_FILE, encoding='latin1')
+        source = "Local CSV"
+
+    if df is None or df.empty:
+        return {}, {}, "Failed"
+
+    # --- AGGRESSIVE COLUMN FINDER ---
+    # Creates a map of {lowercase_name: actual_column_name}
+    cols_lower = {c.lower().strip(): c for c in df.columns}
+    
+    def get_col_name(*candidates):
+        # 1. Exact match (case insensitive)
+        for c in candidates:
+            if c.lower() in cols_lower: return cols_lower[c.lower()]
+        # 2. Fuzzy match (contains word)
+        for c in candidates:
+            for actual in cols_lower:
+                if c.lower() in actual: return cols_lower[actual]
+        return None
+
+    # Map the columns
+    c_school = get_col_name('school', 'institution', 'university')
+    c_first = get_col_name('first name', 'first')
+    c_last = get_col_name('last name', 'last')
+    c_email = get_col_name('email', 'e-mail', 'mail')
+    c_twitter = get_col_name("individual's twitter", "twitter", "x.com", "social")
+    c_title = get_col_name('title', 'position', 'role')
+
+    lookup, name_lookup = {}, {}
+
+    for _, row in df.iterrows():
+        # Extract
+        school = str(row[c_school]).strip() if c_school and pd.notna(row[c_school]) else ""
+        first = str(row[c_first]).strip() if c_first and pd.notna(row[c_first]) else ""
+        last = str(row[c_last]).strip() if c_last and pd.notna(row[c_last]) else ""
         
-        # 2. Try Local File
-        if (df is None or df.empty) and MASTER_DB_FILE:
-            try: df = pd.read_csv(MASTER_DB_FILE, encoding='utf-8')
-            except: df = pd.read_csv(MASTER_DB_FILE, encoding='latin1')
+        if school and (first or last):
+            full_name = f"{first} {last}".strip()
             
-        if df is None or df.empty: return {}, {}
-
-        # --- SMART COLUMN DETECTION ---
-        cols_lower = {c.lower().strip(): c for c in df.columns}
-        
-        def find_col(*keywords):
-            for k in keywords:
-                if k in cols_lower: return cols_lower[k]
-                for actual_col in cols_lower:
-                    if k in actual_col: return cols_lower[actual_col]
-            return None
-
-        col_school = find_col('school', 'institution')
-        col_first = find_col('first name', 'first')
-        col_last = find_col('last name', 'last')
-        col_email = find_col('email', 'e-mail')
-        col_twitter = find_col("individual's twitter", 'twitter', 'social', 'x.com')
-        col_title = find_col('title', 'position')
-
-        lookup, name_lookup = {}, {}
-
-        for _, row in df.iterrows():
-            school = str(row[col_school]).strip() if col_school and pd.notna(row[col_school]) else ""
-            first = str(row[col_first]).strip() if col_first and pd.notna(row[col_first]) else ""
-            last = str(row[col_last]).strip() if col_last and pd.notna(row[col_last]) else ""
+            # Get Email/Twitter using found columns
+            email = str(row[c_email]).strip() if c_email and pd.notna(row[c_email]) else ""
+            twitter = str(row[c_twitter]).strip() if c_twitter and pd.notna(row[c_twitter]) else ""
+            title = str(row[c_title]).strip() if c_title and pd.notna(row[c_title]) else ""
             
-            if school and (first or last):
-                full_name = f"{first} {last}".strip()
-                email = str(row[col_email]).strip() if col_email and pd.notna(row[col_email]) else ""
-                twitter = str(row[col_twitter]).strip() if col_twitter and pd.notna(row[col_twitter]) else ""
-                title = str(row[col_title]).strip() if col_title and pd.notna(row[col_title]) else ""
-                
-                rec = {'email': email, 'twitter': twitter, 'title': title, 'school': school, 'name': full_name}
-                s_key = normalize_text(school)
-                n_key = normalize_text(full_name)
-                
-                lookup[(s_key, n_key)] = rec
-                if n_key not in name_lookup: name_lookup[n_key] = []
-                name_lookup[n_key].append(rec)
-        return lookup, name_lookup
-    except Exception as e:
-        print(f"DB Load Error: {e}")
-        return {}, {}
+            rec = {'email': email, 'twitter': twitter, 'title': title, 'school': school, 'name': full_name}
+            
+            # Create Keys
+            s_key = normalize_text(school)
+            n_key = normalize_text(full_name)
+            
+            lookup[(s_key, n_key)] = rec
+            if n_key not in name_lookup: name_lookup[n_key] = []
+            name_lookup[n_key].append(rec)
+            
+    return lookup, name_lookup, source
 
 if "master_data" not in st.session_state:
     st.session_state["master_data"] = load_lookup()
-master_lookup, name_lookup = st.session_state["master_data"]
+master_lookup, name_lookup, db_source = st.session_state["master_data"]
 
 def detect_sport(bio):
     text = str(bio).lower()
@@ -182,11 +190,17 @@ def get_snippet(text, keyword):
     return clean_text[:100] + "..."
 
 # --- 4. SEARCH LOGIC ---
+st.markdown('<p class="instruction-text">Type in keywords to search college football webpage bios.<br>Put a comma between keywords for multiple searches (e.g., "Linebacker, Recruiting").</p>', unsafe_allow_html=True)
+
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     with st.form(key='search_form'):
-        keywords_str = st.text_input("", placeholder="🔍 Search Database (e.g., Atlanta)")
+        keywords_str = st.text_input("", placeholder="🔍 Enter keywords...")
         submit_button = st.form_submit_button(label='Search')
+
+# Warning if DB failed
+if db_source == "Failed":
+    st.warning("⚠️ Master Database not found. Emails and Twitter handles will be empty.")
 
 if 'search_results' not in st.session_state:
     st.session_state['search_results'] = pd.DataFrame()
@@ -224,8 +238,12 @@ if submit_button and keywords_str:
                         
                         s_key = normalize_text(meta['School'])
                         n_key = normalize_text(name)
+                        
+                        # MATCHING LOGIC
                         match = master_lookup.get((s_key, n_key), {})
-                        if not match and n_key in name_lookup: match = name_lookup[n_key][0]
+                        # Fallback: Try Name only if School mismatch
+                        if not match and n_key in name_lookup:
+                            match = name_lookup[n_key][0]
                             
                         results_found.append({
                             'Role': meta['Role'],
