@@ -8,73 +8,101 @@ import requests
 import pandas as pd
 from datetime import datetime
 
-# --- 1. UI CONFIGURATION ---
+# --- 1. APPLE ELITE UI CONFIGURATION ---
 st.set_page_config(page_title="Coulter Recruiting", page_icon="🏈", layout="wide")
 
 st.markdown("""
     <style>
+    /* Global Apple Font & Light Gray Background */
     html, body, [class*="css"] {
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        background-color: #FAFAFA; 
-        color: #111111;
+        font-family: -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        background-color: #F2F2F7; /* Apple System Gray 6 */
+        color: #1D1D1F;
     }
+    
     header {visibility: hidden;}
     footer {visibility: hidden;}
     .block-container {padding-top: 2rem;}
 
+    /* HEADER: High-End Gradient */
     .header-container {
-        background: linear-gradient(135deg, #8B0000 0%, #1A1A1A 100%);
-        padding: 45px;
-        border-radius: 15px;
+        background: linear-gradient(135deg, #000000 0%, #333333 100%);
+        padding: 50px 20px;
+        border-radius: 24px;
         text-align: center;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        box-shadow: 0 20px 40px rgba(0,0,0,0.15);
         margin-bottom: 40px;
-        border-bottom: 6px solid #000000;
         color: white;
     }
     .main-title { 
-        font-size: 3.5rem; 
-        font-weight: 900; 
+        font-size: 3.2rem; 
+        font-weight: 700; 
         color: #FFFFFF; 
         margin: 0; 
-        letter-spacing: -1px; 
-        text-transform: uppercase;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        letter-spacing: -1.5px;
     }
     .sub-title { 
-        font-size: 1.3rem; 
+        font-size: 1.1rem; 
         font-weight: 500; 
-        color: #E0E0E0; 
-        margin-top: 5px; 
+        color: #8E8E93; 
+        margin-top: 8px; 
         text-transform: uppercase; 
-        letter-spacing: 3px; 
+        letter-spacing: 4px; 
     }
 
+    /* SEARCH BAR: Oval & Clean */
     .stTextInput > div > div > input {
-        border-radius: 8px; border: 2px solid #E0E0E0; padding: 15px 20px; font-size: 18px; 
-        color: #333; background-color: #FFF; transition: all 0.3s ease;
+        border-radius: 20px; 
+        border: 1px solid #D1D1D6; 
+        padding: 18px 25px; 
+        font-size: 17px; 
+        color: #1D1D1F;
+        background-color: #FFFFFF;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.02);
+        transition: all 0.2s ease;
     }
     .stTextInput > div > div > input:focus {
-        border-color: #8B0000; box-shadow: 0 0 0 3px rgba(139, 0, 0, 0.1);
+        border-color: #007AFF;
+        box-shadow: 0 0 0 4px rgba(0,122,255,0.1);
     }
 
+    /* BUTTON: The Apple "Oval" */
     .stButton > button {
-        background: linear-gradient(90deg, #B22222 0%, #800000 100%);
-        color: white; border-radius: 8px; padding: 15px 30px; font-weight: 700; 
-        border: none; width: 100%; text-transform: uppercase; letter-spacing: 1px; 
-        transition: transform 0.1s ease;
+        background: #000000;
+        color: white; 
+        border-radius: 30px; /* Fully Oval */
+        padding: 12px 40px; 
+        font-weight: 600; 
+        font-size: 16px;
+        border: none; 
+        width: auto;
+        display: block;
+        margin: 0 auto;
+        transition: all 0.2s ease;
     }
     .stButton > button:hover {
-        transform: scale(1.02); box-shadow: 0 5px 15px rgba(139, 0, 0, 0.3);
+        background: #333333;
+        transform: translateY(-1px);
+        box-shadow: 0 8px 20px rgba(0,0,0,0.15);
     }
-    .stDataFrame { border: 1px solid #ddd; border-radius: 8px; }
+    .stButton > button:active {
+        transform: translateY(0);
+    }
+    
+    /* TABLE STYLING */
+    .stDataFrame { 
+        background-color: white;
+        border-radius: 20px;
+        padding: 10px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.05);
+    }
     </style>
     """, unsafe_allow_html=True)
 
 st.markdown("""
     <div class="header-container">
         <div class="main-title">🏈 COULTER RECRUITING</div>
-        <div class="sub-title">Elite Search Engine</div>
+        <div class="sub-title">Football Search Engine</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -82,21 +110,20 @@ st.markdown("""
 MASTER_DB_FILE = 'REC_CONS_MASTER.csv' 
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
-# A. KEYWORDS
+# KEYWORDS
 FOOTBALL_INDICATORS = [
     "football", "quarterback", "linebacker", "touchdown", "nfl", "bowl", 
     "offensive", "defensive", "special teams", "recruiting", "fbs", "fcs",
-    "interception", "tackle", "gridiron", "playoff", "super bowl", "pro bowl",
-    "coaching staff", "head coach", "coordinator", "rushing", "passing"
+    "interception", "tackle", "gridiron", "playoff", "super bowl", "pro bowl"
 ]
 
 NON_FOOTBALL_INDICATORS = {
-    "Volleyball": ["volleyball", "set", "spike", "libero", "dig", "kill", "block", "setter"],
-    "Baseball": ["baseball", "inning", "homerun", "pitcher", "dugout", "mlb", "batting", "shortstop"],
-    "Basketball": ["basketball", "nba", "dunk", "rebound", "three-pointer", "court", "guard", "forward"],
-    "Soccer": ["soccer", "goal", "midfielder", "striker", "goalkeeper", "fifa", "net", "shutout"],
+    "Volleyball": ["volleyball", "set", "spike", "libero", "dig", "kill", "block"],
+    "Baseball": ["baseball", "inning", "homerun", "pitcher", "dugout", "mlb", "batting"],
+    "Basketball": ["basketball", "nba", "dunk", "rebound", "three-pointer", "court"],
+    "Soccer": ["soccer", "goal", "midfielder", "striker", "goalkeeper", "fifa"],
     "Softball": ["softball", "pitcher", "inning"],
-    "Track": ["track", "sprint", "hurdle", "relay", "marathon", "cross country", "meters"],
+    "Track": ["track", "sprint", "hurdle", "relay", "marathon"],
     "Swimming": ["swim", "dive", "freestyle", "breaststroke", "pool"],
     "Lacrosse": ["lacrosse", "stick", "goalie", "crease"]
 }
@@ -107,67 +134,28 @@ GARBAGE_PHRASES = [
     "View Full Profile", "Related Headlines", "Source:", "https://"
 ]
 
-POISON_PILLS_RAW = [
-    "Women's Flag", "Flag Football", "Men's Basketball", "Women's Basketball", 
-    "Volleyball", "Baseball", "Softball", "Soccer", "Tennis", "Golf", 
-    "Swimming", "Lacrosse", "Hockey", "Wrestling", "Gymnastics"
+POISON_PILLS_TEXT = ["Women's Flag", "Flag Football"]
+
+POISON_PILLS_HEADER = [
+    "Flag", "Volleyball", "Baseball", "Softball", "Soccer", "Tennis", "Golf", 
+    "Swimming", "Lacrosse", "Hockey", "Wrestling", "Gymnastics", "Basketball", 
+    "Track & Field", "Crew", "Rowing", "Sailing", "Cheerleading", "Fencing"
 ]
 
-BAD_NAMES = [
-    "Football Roster", "Football Schedule", "Composite Schedule", "Game Recap", 
-    "Box Score", "Statistic", "Menu", "Search", "Tickets", "Donate", "Camps", 
-    "Facilities", "Staff Directory", "2024", "2025", "2026", "Privacy Policy", 
-    "Terms of Service", "Accessibility", "Ad Blocker", "View Bio"
-]
+BAD_NAMES = ["Football Roster", "Football Schedule", "Composite Schedule", "Game Recap", "Menu", "Search", "Tickets"]
 
 JOB_TITLES = [
     "Head Coach", "Defensive Coordinator", "Offensive Coordinator", "Special Teams Coordinator",
     "Recruiting Coordinator", "Director of Player Personnel", "Director of Football Operations",
-    "General Manager", "Assistant Coach", "Associate Head Coach", "Run Game Coordinator", "Pass Game Coordinator",
-    "Quarterbacks Coach", "Linebackers Coach", "Wide Receivers Coach", "Offensive Line Coach",
-    "Defensive Line Coach", "Cornerbacks Coach", "Safeties Coach", "Tight Ends Coach", "Running Backs Coach",
-    "Graduate Assistant", "Analyst", "Quality Control", "Director of Scouting"
+    "Assistant Coach", "Graduate Assistant", "Analyst", "Quality Control"
 ]
 
-DOMAIN_MAP = {
-    "thesundevils.com": "Arizona State", "rolltide.com": "Alabama", "auburntigers.com": "Auburn",
-    "uclabruins.com": "UCLA", "usctrojans.com": "USC", "seminoles.com": "Florida State",
-    "gatorssports.com": "Florida", "floridagators.com": "Florida", "georgiadogs.com": "Georgia",
-    "lsusports.net": "LSU", "olemisssports.com": "Ole Miss", "hailstate.com": "Mississippi State",
-    "mutigers.com": "Missouri", "gamecocksonline.com": "South Carolina", "utsports.com": "Tennessee",
-    "12thman.com": "Texas A&M", "arkansasrazorbacks.com": "Arkansas", "ukathletics.com": "Kentucky",
-    "vucommodores.com": "Vanderbilt", "ohiostatebuckeyes.com": "Ohio State", "mgoblue.com": "Michigan",
-    "gopsusports.com": "Penn State", "uwbadgers.com": "Wisconsin", "huskers.com": "Nebraska",
-    "hawkeyesports.com": "Iowa", "msuspartans.com": "Michigan State", "gophersports.com": "Minnesota",
-    "fightingillini.com": "Illinois", "purduesports.com": "Purdue", "iuhoosiers.com": "Indiana",
-    "scarletknights.com": "Rutgers", "umterps.com": "Maryland", "virginiasports.com": "Virginia",
-    "hokieSports.com": "Virginia Tech", "theacc.com": "ACC", "clemsontigers.com": "Clemson",
-    "gopack.com": "NC State", "bceagles.com": "Boston College", "cuse.com": "Syracuse",
-    "godeacs.com": "Wake Forest", "ramblinwreck.com": "Georgia Tech", "pittsburghpanthers.com": "Pittsburgh",
-    "gostanford.com": "Stanford", "calbears.com": "California", "goducks.com": "Oregon",
-    "gohuskies.com": "Washington", "cubuffs.com": "Colorado", "utahutes.com": "Utah",
-    "arizonawildcats.com": "Arizona", "texassports.com": "Texas", "soonersports.com": "Oklahoma",
-    "gofrogs.com": "TCU", "baylorbears.com": "Baylor", "texastech.com": "Texas Tech",
-    "kuathletics.com": "Kansas", "kstatesports.com": "Kansas State", "okstate.com": "Oklahoma State",
-    "cyclones.com": "Iowa State", "wvusports.com": "West Virginia", "ucfknights.com": "UCF",
-    "gobearcats.com": "Cincinnati", "uhcougars.com": "Houston", "byucougars.com": "BYU"
-}
-
 SCHOOL_ALIASES = {
-    "ASU": "Arizona State", "Arizona State University": "Arizona State", "Sun Devils": "Arizona State",
-    "UCF": "Central Florida", "Central Florida": "UCF", "Knights": "Central Florida",
-    "Ole Miss": "Mississippi", "Mississippi": "Ole Miss", "Rebels": "Mississippi",
-    "SMU": "Southern Methodist", "Southern Methodist": "SMU", "Mustangs": "Southern Methodist",
-    "USC": "Southern California", "Southern California": "USC", "Trojans": "Southern California",
-    "LSU": "Louisiana State", "Louisiana State": "LSU", "Tigers": "Louisiana State",
-    "TCU": "Texas Christian", "Texas Christian": "TCU", "Horned Frogs": "Texas Christian",
-    "BYU": "Brigham Young", "Brigham Young": "BYU", "Cougars": "Brigham Young",
-    "FSU": "Florida State", "Florida State": "FSU", "Seminoles": "Florida State",
-    "Miami (FL)": "Miami", "Miami": "Miami (FL)", "Hurricanes": "Miami (FL)",
-    "UNC": "North Carolina", "Tar Heels": "North Carolina",
-    "UGA": "Georgia", "Bulldogs": "Georgia",
-    "Bama": "Alabama", "Crimson Tide": "Alabama",
-    "UCLA": "UCLA", "Bruins": "UCLA"
+    "ASU": "Arizona State", "Sun Devils": "Arizona State",
+    "UCF": "Central Florida", "Knights": "Central Florida",
+    "Ole Miss": "Mississippi", "Rebels": "Mississippi",
+    "FSU": "Florida State", "Seminoles": "Florida State",
+    "Miami": "Miami (FL)", "Hurricanes": "Miami (FL)"
 }
 
 # --- 3. HELPER FUNCTIONS ---
@@ -187,17 +175,12 @@ def load_lookup():
         try: df = pd.read_csv(MASTER_DB_FILE, encoding='utf-8')
         except: df = pd.read_csv(MASTER_DB_FILE, encoding='latin1')
         lookup, name_lookup = {}, {}
-        email_col = next((c for c in df.columns if 'Email' in c), None)
-        twitter_col = next((c for c in df.columns if 'Twitter' in c), None)
-        title_col = next((c for c in df.columns if 'Title' in c), None)
         for _, row in df.iterrows():
             s_raw = str(row.get('School', '')).strip()
             s_key, n_key = normalize_text(s_raw), normalize_text(f"{row.get('First name', '')}{row.get('Last name', '')}")
             if n_key:
-                rec = {'email': str(row.get(email_col, '')).strip() if email_col else "", 'twitter': str(row.get(twitter_col, '')).strip() if twitter_col else "", 'title': str(row.get(title_col, '')).strip() if title_col else "", 'school': s_raw}
+                rec = {'email': str(row.get('Email address', '')).strip(), 'twitter': str(row.get('Twitter', '')).strip(), 'title': str(row.get('Title', '')).strip(), 'school': s_raw}
                 lookup[(s_key, n_key)] = rec
-                for alias, real_name in SCHOOL_ALIASES.items():
-                    if s_raw == real_name: lookup[(normalize_text(alias), n_key)] = rec
                 if n_key not in name_lookup: name_lookup[n_key] = []
                 name_lookup[n_key].append(rec)
         return lookup, name_lookup
@@ -207,26 +190,20 @@ if "master_data" not in st.session_state:
     st.session_state["master_data"] = load_lookup()
 master_lookup, name_lookup = st.session_state["master_data"]
 
-def detect_school_from_url(bio_text):
-    match = re.search(r"SOURCE: https?://(www\.)?([a-zA-Z0-9.-]+)", str(bio_text))
-    if match:
-        domain = match.group(2).lower()
-        if domain in DOMAIN_MAP: return DOMAIN_MAP[domain]
-        for key, school in DOMAIN_MAP.items():
-            if key in domain: return school
-    return None
-
 def detect_sport_context(bio):
     if pd.isna(bio): return "Uncertain"
     text = str(bio)
     
-    # 1. Clean Menu Junk (Choose a Player, etc)
-    clean_text = re.sub(r"Choose a Player.*", "", text, flags=re.IGNORECASE)
-    clean_text = re.sub(r"Go.*", "", clean_text, flags=re.IGNORECASE)
+    # Ignore personal favorites (Fix for Row 171/174 Soccer players who like the Falcons)
+    bio_clean = re.sub(r"Favorite sports team.*", "", text, flags=re.IGNORECASE)
+    bio_clean = re.sub(r"Hobbies include.*", "", bio_clean, flags=re.IGNORECASE)
     
-    # 2. Poison Pill (Nuclear)
+    # 1. Clean Menu Junk
+    clean_text = re.sub(r"Choose a Player.*", "", bio_clean, flags=re.IGNORECASE)
+    
+    # 2. Poison Pill
     intro_text = clean_text[:1000].lower()
-    for poison in POISON_PILLS_RAW:
+    for poison in POISON_PILLS_TEXT:
         if poison.lower() in intro_text: return None 
 
     # 3. Score
@@ -241,14 +218,9 @@ def detect_sport_context(bio):
             max_other_score = score
             likely_other_sport = sport
 
-    # 4. Weight Check (Fix for 135lb Soccer players)
-    # If weight < 160 lbs, require STRONG football evidence
+    # 4. Weight Check
     weight_match = re.search(r"Weight\s*(\d{2,3})", text, re.IGNORECASE)
-    if weight_match:
-        weight = int(weight_match.group(1))
-        if weight < 160:
-            # Must have football keywords or be deleted
-            if fb_score < 2: return None 
+    if weight_match and int(weight_match.group(1)) < 160 and fb_score < 2: return None 
 
     if fb_score > 0: return "Football"
     if max_other_score > 2: return likely_other_sport
@@ -257,15 +229,8 @@ def detect_sport_context(bio):
 def detect_player_by_context(bio, title):
     text = str(bio).lower()[:2000]
     if any(x in str(title).lower() for x in ["roster", "football", "athlete", "player"]): return True
-    if any(x in text for x in ["freshman", "sophomore", "junior", "senior", "redshirt", "class of 20"]): return True
-    
-    # PARENT CHECK (Dead giveaway for player)
-    if "son of" in text or "daughter of" in text: return True
-    if "hometown:" in text or "major:" in text or "high school:" in text: return True
-    
-    # Stats
-    if "yards" in text or "tackles" in text or "punts" in text or "kicks" in text:
-        if "coach" not in str(title).lower(): return True
+    if any(x in text for x in ["freshman", "sophomore", "junior", "senior", "redshirt", "son of", "daughter of"]): return True
+    if re.search(r"\d['’]-?\d+\"?\s+\d{2,3}\s?lbs", text): return True
     return False
 
 def extract_title_from_text(bio):
@@ -276,9 +241,6 @@ def extract_title_from_text(bio):
 
 def parse_header_smart(bio):
     extracted = {'Name': None, 'Title': None, 'School': None, 'Role': 'COACH/STAFF'}
-    url_school = detect_school_from_url(bio)
-    if url_school: extracted['School'] = url_school
-    
     clean_text = str(bio).replace('\r', '\n').replace('–', '-').replace('—', '-')
     lines = [L.strip() for L in clean_text.split('\n') if L.strip()]
     header = None
@@ -289,15 +251,9 @@ def parse_header_smart(bio):
     if header:
         parts = [p.strip() for p in header.split(' - ')]
         clean_parts = [p for p in parts if not any(g.lower() in p.lower() for g in GARBAGE_PHRASES)]
-        if len(clean_parts) >= 3: extracted['Name'], extracted['Title'] = clean_parts[0], clean_parts[1]; 
-        elif len(clean_parts) == 2: extracted['Name'] = clean_parts[0]; extracted['Title'] = "Staff"
+        if len(clean_parts) >= 3: extracted['Name'], extracted['Title'] = clean_parts[0], clean_parts[1]; extracted['School'] = clean_parts[2]
+        elif len(clean_parts) == 2: extracted['Name'] = clean_parts[0]; extracted['School'] = clean_parts[1]; extracted['Title'] = "Staff"
         elif len(clean_parts) == 1: extracted['Name'] = clean_parts[0]
-        if not extracted.get('School') and len(clean_parts) >= 3: extracted['School'] = clean_parts[2]
-        elif not extracted.get('School') and len(clean_parts) == 2: extracted['School'] = clean_parts[1]
-
-        if extracted['Title'] and any(x in str(extracted['Title']) for x in ["University", "College", "Athletics"]):
-            if not extracted['School'] or extracted['School'] == "Unknown": extracted['School'] = extracted['Title']
-            extracted['Title'] = "Staff"
 
         raw_school = str(extracted['School']).strip()
         for alias, real_name in SCHOOL_ALIASES.items():
@@ -321,7 +277,7 @@ if 'search_filename' not in st.session_state: st.session_state.search_filename =
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     with st.form(key='search_form'):
-        keywords_str = st.text_input("", placeholder="🔍 Search Database (e.g. Tallahassee, Quarterback)...")
+        keywords_str = st.text_input("", placeholder="🔍 Search Database...")
         submit_button = st.form_submit_button(label='RUN SEARCH')
 
 if submit_button:
@@ -341,15 +297,6 @@ if submit_button:
                     df_iter = pd.read_csv(file, chunksize=1000, on_bad_lines='skip', dtype=str)
                     for chunk in df_iter:
                         chunk.fillna("", inplace=True)
-                        col_map = {}
-                        for c in chunk.columns:
-                            c_clean = c.strip()
-                            if c_clean.lower() in ['bio', 'full_bio', 'description', 'full bio']: col_map[c_clean] = 'Full_Bio'
-                            elif c_clean.lower() == 'name': col_map[c_clean] = 'Name'
-                            elif c_clean.lower() == 'school': col_map[c_clean] = 'School'
-                            elif c_clean.lower() == 'title': col_map[c_clean] = 'Title'
-                        chunk.rename(columns=col_map, inplace=True)
-                        if 'Full_Bio' not in chunk.columns: continue
                         mask = chunk['Full_Bio'].str.contains('|'.join(keywords), case=False, na=False)
                         if mask.any():
                             found = chunk[mask].copy()
@@ -358,52 +305,33 @@ if submit_button:
                                 name = row.get('Name', '')
                                 if not name or name == "Unknown" or len(name) < 3: name = meta['Name'] or name
                                 if any(bad.lower() in str(name).lower() for bad in BAD_NAMES): return None
-                                if len(str(name)) > 40: return None
                                 
-                                title = row.get('Title', '')
-                                if not title or title == "Unknown": title = meta['Title'] or title
-                                school = row.get('School', '')
-                                if not school or school == "Unknown": school = meta['School'] or school
-                                
-                                # Header Poison
+                                title, school = meta['Title'] or "Staff", meta['School'] or "Unknown"
                                 header_check = (str(title) + " " + str(school)).lower()
                                 for poison in POISON_PILLS_HEADER:
                                     if poison.lower() in header_check: return None
 
-                                # Context Siphon
                                 detected_sport = detect_sport_context(row['Full_Bio'])
                                 if detected_sport != "Football" and detected_sport != "Uncertain": return None 
 
                                 role = meta['Role']
-                                if role == "COACH/STAFF":
-                                    if detect_player_by_context(row['Full_Bio'], title):
-                                        role = "PLAYER"; title = "Roster Member"
-                                        if "football" in str(title).lower(): title = "Roster Member"
+                                if role == "COACH/STAFF" and detect_player_by_context(row['Full_Bio'], title):
+                                    role = "PLAYER"; title = "Roster Member"
 
-                                if title == "Staff" or title == "Unknown":
-                                    scavenged_title = extract_title_from_text(row['Full_Bio'])
-                                    if scavenged_title != "Staff": title = scavenged_title
+                                if title in ["Staff", "Unknown"]:
+                                    scavenged = extract_title_from_text(row['Full_Bio'])
+                                    if scavenged != "Staff": title = scavenged
 
                                 match = master_lookup.get((normalize_text(school), normalize_text(name)))
                                 if not match:
                                     cands = name_lookup.get(normalize_text(name), [])
                                     if len(cands) == 1: match = cands[0]
-                                    elif len(cands) > 1:
-                                        ns = normalize_text(school)
-                                        for c in cands:
-                                            if normalize_text(c['school']) in ns or ns in normalize_text(c['school']): match = c; break
                                 
-                                email = row.get('Email', '')
-                                twitter = row.get('Twitter', '')
-                                sport_val = "Football"
+                                email, twitter, sport_val = "", "", "Football"
                                 if match:
-                                    if not email: email = match['email']
-                                    if not twitter: twitter = match['twitter']
-                                    if title in ["Staff", "Unknown", "Football"]: title = match['title']
-                                    school = match['school']
-                                flat_bio = str(row['Full_Bio']).replace('\n', ' ').replace('\r', ' ').strip()
-                                flat_bio = re.sub(r'\s+', ' ', flat_bio)
-                                return pd.Series([role, name, title, school, sport_val, email, twitter, flat_bio])
+                                    email, twitter, title, school = match['email'], match['twitter'], match['title'], match['school']
+                                
+                                return pd.Series([role, name, title, school, sport_val, email, twitter, row['Full_Bio']])
 
                             enriched = found.apply(enrich_row, axis=1)
                             enriched.dropna(how='all', inplace=True)
@@ -416,34 +344,22 @@ if submit_button:
 
             progress_bar.empty()
             if results:
-                final_df = pd.concat(results)
-                final_df = final_df[~final_df['Name'].str.contains("Skip To|Official|Javascript", case=False, na=False)]
-                final_df.dropna(subset=['Name'], inplace=True)
-                final_df.drop_duplicates(subset=['Name', 'School'], inplace=True)
+                final_df = pd.concat(results).drop_duplicates(subset=['Name', 'School'])
                 final_df['Role_Sort'] = final_df['Role'].apply(lambda x: 1 if "PLAYER" in str(x).upper() else 0)
                 final_df.sort_values(by=['Role_Sort', 'School', 'Name'], ascending=[True, True, True], inplace=True)
                 cols = ['Role', 'Name', 'Title', 'School', 'Sport', 'Email', 'Twitter', 'Context_Snippet', 'Full_Bio']
-                final_df = final_df[cols]
-                
-                st.session_state.search_results = final_df
-                safe_kw = keywords[0].replace(' ', '_')
-                date_str = datetime.now().strftime("%Y-%m-%d")
-                st.session_state.search_filename = f"{safe_kw}_{date_str}.xlsx"
+                st.session_state.search_results = final_df[cols]
+                st.session_state.search_filename = f"{keywords[0].replace(' ', '_')}_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
             else:
-                st.session_state.search_results = None
-                st.warning("No matches found.")
+                st.session_state.search_results = None; st.warning("No matches found.")
 
 # --- 6. DISPLAY ---
 if st.session_state.search_results is not None:
     st.success(f"🎉 Found {len(st.session_state.search_results)} matches.")
     st.dataframe(st.session_state.search_results, use_container_width=True)
-    
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         st.session_state.search_results.to_excel(writer, index=False, sheet_name="Results")
-        workbook = writer.book
-        worksheet = writer.sheets["Results"]
-        cell_format = workbook.add_format({'text_wrap': False, 'valign': 'top'})
-        worksheet.set_column('A:I', 25, cell_format)
-    
+        cell_format = writer.book.add_format({'text_wrap': False, 'valign': 'top'})
+        writer.sheets["Results"].set_column('A:I', 25, cell_format)
     st.download_button("💾 DOWNLOAD RESULTS (EXCEL)", buffer.getvalue(), st.session_state.search_filename, "application/vnd.ms-excel", type="primary")
