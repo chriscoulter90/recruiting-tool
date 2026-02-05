@@ -55,17 +55,18 @@ st.markdown("""
     </div>
     """, unsafe_allow_html=True)
 
-# --- 2. CONSTANTS & SETUP ---
-# Try both filenames to avoid "File Not Found" crash on Linux
+# --- 2. CONSTANTS ---
+# Use flexible filename check to prevent Linux crashes
 if os.path.exists('REC_CONS_MASTER.csv'):
     MASTER_DB_FILE = 'REC_CONS_MASTER.csv'
 elif os.path.exists('rec_cons_master.csv'):
     MASTER_DB_FILE = 'rec_cons_master.csv'
 else:
-    MASTER_DB_FILE = None # Handle missing file gracefully
+    MASTER_DB_FILE = None
 
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
+# Keywords & Filters
 FOOTBALL_INDICATORS = ["football", "quarterback", "linebacker", "touchdown", "nfl", "bowl", "recruiting", "fbs", "fcs", "interception", "tackle", "gridiron"]
 NON_FOOTBALL_INDICATORS = {
     "Volleyball": ["volleyball", "set", "spike", "libero"], "Baseball": ["baseball", "inning", "homerun", "pitcher"],
@@ -74,9 +75,7 @@ NON_FOOTBALL_INDICATORS = {
 }
 GARBAGE_PHRASES = ["Official Athletics Website", "Composite", "Javascript is required", "Skip To Main Content", "View Full Profile"]
 POISON_PILLS_TEXT = ["Women's Flag", "Flag Football"]
-POISON_PILLS_HEADER = ["Flag", "Volleyball", "Baseball", "Softball", "Soccer", "Tennis", "Golf", "Swimming", "Lacrosse", "Hockey", "Wrestling", "Basketball", "Track"]
 BAD_NAMES = ["Football Roster", "Football Schedule", "Composite Schedule", "Game Recap", "Menu", "Search", "Tickets"]
-JOB_TITLES = ["Head Coach", "Defensive Coordinator", "Offensive Coordinator", "Special Teams Coordinator", "Recruiting Coordinator", "Director of Player Personnel", "Director of Football Operations", "Assistant Coach", "Graduate Assistant", "Analyst", "Quality Control"]
 SCHOOL_ALIASES = {"ASU": "Arizona State", "UCF": "Central Florida", "Ole Miss": "Mississippi", "FSU": "Florida State", "Miami": "Miami (FL)"}
 
 # --- 3. HELPER FUNCTIONS ---
@@ -89,7 +88,7 @@ def normalize_text(text):
 
 @st.cache_data(show_spinner=False)
 def load_lookup():
-    """Load coach database safely."""
+    """Load coach database safely on demand."""
     try:
         # 1. Try Google Sheet first
         try:
@@ -125,48 +124,18 @@ def load_lookup():
             if school and (first or last):
                 full_name = f"{first} {last}".strip()
                 rec = {'email': email, 'twitter': twitter, 'title': title, 'school': school, 'name': full_name}
-                
                 s_key = normalize_text(school)
                 n_key = normalize_text(full_name)
-                
                 lookup[(s_key, n_key)] = rec
                 if n_key not in name_lookup: name_lookup[n_key] = []
                 name_lookup[n_key].append(rec)
-                
         return lookup, name_lookup
-    except Exception as e:
-        print(f"Lookup Error: {e}")
-        return {}, {}
+    except: return {}, {}
 
+# Lazy load master data so app doesn't crash on boot
 if "master_data" not in st.session_state:
     st.session_state["master_data"] = load_lookup()
 master_lookup, name_lookup = st.session_state["master_data"]
-
-@st.cache_data(show_spinner=False)
-def load_chunk_data():
-    """Load chunks safely to prevent memory crashes."""
-    chunk_files = glob.glob("chunk_*.csv")
-    if not chunk_files: return pd.DataFrame()
-    
-    chunk_files.sort()
-    all_chunks = []
-    
-    for f in chunk_files:
-        try:
-            # Load as string to save memory and avoid dtype errors
-            df = pd.read_csv(f, dtype=str, on_bad_lines='skip').fillna("")
-            all_chunks.append(df)
-        except: continue
-            
-    if all_chunks:
-        return pd.concat(all_chunks, ignore_index=True)
-    return pd.DataFrame()
-
-# Load Data
-if "chunk_data" not in st.session_state:
-    with st.spinner("Loading Database..."):
-        st.session_state["chunk_data"] = load_chunk_data()
-chunk_data = st.session_state["chunk_data"]
 
 def detect_sport(bio):
     text = str(bio).lower()
@@ -180,22 +149,16 @@ def parse_header(bio):
     lines = [L.strip() for L in str(bio).split('\n') if L.strip()][:8]
     header = next((L for L in lines if " - " in L and "http" not in L), None)
     extracted = {'Name': None, 'Title': "Staff", 'School': "Unknown", 'Role': 'COACH/STAFF'}
-    
     if header:
         parts = header.split(' - ')
         if len(parts) >= 2:
             extracted['Name'] = parts[0].strip()
             extracted['School'] = parts[-1].strip()
             if len(parts) > 2: extracted['Title'] = parts[1].strip()
-            
-    # Alias Check
     for alias, real in SCHOOL_ALIASES.items():
         if alias.lower() in extracted['School'].lower(): extracted['School'] = real
-        
-    # Player Check
     if "202" in extracted['Title'] or "Roster" in extracted['Title']:
         extracted['Role'] = "PLAYER"; extracted['Title'] = "Roster Member"
-        
     return extracted
 
 def get_snippet(text, keyword):
@@ -205,7 +168,7 @@ def get_snippet(text, keyword):
         return f"...{text[s:e]}..."
     return text[:150] + "..."
 
-# --- 4. SEARCH UI ---
+# --- 4. SEARCH LOGIC (LOW MEMORY MODE) ---
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     with st.form(key='search_form'):
@@ -213,62 +176,73 @@ with col2:
         submit_button = st.form_submit_button(label='Search')
 
 if submit_button and keywords_str:
-    if chunk_data.empty:
-        st.error("❌ Database is empty or failed to load.")
+    keywords = [k.strip() for k in keywords_str.split(',') if k.strip()]
+    pattern = '|'.join([re.escape(k) for k in keywords])
+    
+    # 1. Get files but DO NOT load them yet
+    chunk_files = glob.glob("chunk_*.csv")
+    chunk_files.sort()
+    
+    if not chunk_files:
+        st.error("❌ No database files found on server.")
     else:
-        keywords = [k.strip() for k in keywords_str.split(',') if k.strip()]
-        pattern = '|'.join([re.escape(k) for k in keywords])
+        results_found = []
+        progress_bar = st.progress(0)
         
-        try:
-            mask = chunk_data['Full_Bio'].str.contains(pattern, case=False, na=False, regex=True)
-            results = chunk_data[mask].copy()
-            
-            if not results.empty:
-                enriched_data = []
-                progress = st.progress(0)
+        # 2. Loop through files one by one (Low Memory)
+        for i, file in enumerate(chunk_files):
+            try:
+                # Load ONE chunk, search it, then delete it immediately
+                df_chunk = pd.read_csv(file, dtype=str, on_bad_lines='skip').fillna("")
+                mask = df_chunk['Full_Bio'].str.contains(pattern, case=False, na=False, regex=True)
                 
-                for idx, row in results.iterrows():
-                    meta = parse_header(row['Full_Bio'])
-                    name = meta['Name'] or row.get('Name', 'Unknown')
+                if mask.any():
+                    matches = df_chunk[mask].copy()
                     
-                    if any(b.lower() in str(name).lower() for b in BAD_NAMES): continue
-                    if detect_sport(row['Full_Bio']) != "Football": continue
-                    
-                    # Master DB Match
-                    s_key = normalize_text(meta['School'])
-                    n_key = normalize_text(name)
-                    match = master_lookup.get((s_key, n_key), {})
-                    if not match and n_key in name_lookup:
-                        match = name_lookup[n_key][0] # Fallback to name only
+                    for idx, row in matches.iterrows():
+                        meta = parse_header(row['Full_Bio'])
+                        name = meta['Name'] or row.get('Name', 'Unknown')
                         
-                    enriched_data.append({
-                        'Role': meta['Role'],
-                        'Name': name,
-                        'Title': match.get('title') or meta['Title'],
-                        'School': match.get('school') or meta['School'],
-                        'Email': match.get('email', ''),
-                        'Twitter': match.get('twitter', ''),
-                        'Context': get_snippet(row['Full_Bio'], keywords[0]),
-                        'Full_Bio': row['Full_Bio']
-                    })
+                        if any(b.lower() in str(name).lower() for b in BAD_NAMES): continue
+                        if detect_sport(row['Full_Bio']) != "Football": continue
+                        
+                        # Master DB Match
+                        s_key = normalize_text(meta['School'])
+                        n_key = normalize_text(name)
+                        match = master_lookup.get((s_key, n_key), {})
+                        if not match and n_key in name_lookup: match = name_lookup[n_key][0]
+                            
+                        results_found.append({
+                            'Role': meta['Role'],
+                            'Name': name,
+                            'Title': match.get('title') or meta['Title'],
+                            'School': match.get('school') or meta['School'],
+                            'Email': match.get('email', ''),
+                            'Twitter': match.get('twitter', ''),
+                            'Context': get_snippet(row['Full_Bio'], keywords[0]),
+                            'Full_Bio': row['Full_Bio']
+                        })
                 
-                progress.empty()
+                # Free memory instantly
+                del df_chunk
+                gc.collect()
                 
-                if enriched_data:
-                    final_df = pd.DataFrame(enriched_data).drop_duplicates(subset=['Name', 'School'])
-                    st.success(f"🎉 Found {len(final_df)} matches.")
-                    
-                    # Display Table (Hide Full Bio)
-                    st.dataframe(final_df.drop(columns=['Full_Bio']), use_container_width=True, hide_index=True)
-                    
-                    # Excel Export
-                    buffer = io.BytesIO()
-                    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                        final_df.to_excel(writer, index=False, sheet_name="Results")
-                    st.download_button("💾 DOWNLOAD EXCEL", buffer.getvalue(), f"Search_{datetime.now().date()}.xlsx", "application/vnd.ms-excel")
-                else:
-                    st.warning("No valid football matches found after filtering.")
-            else:
-                st.warning("No text matches found.")
-        except Exception as e:
-            st.error(f"Search Error: {e}")
+            except Exception: continue
+            
+            # Update progress
+            progress_bar.progress((i + 1) / len(chunk_files))
+
+        progress_bar.empty()
+
+        # 3. Display Results
+        if results_found:
+            final_df = pd.DataFrame(results_found).drop_duplicates(subset=['Name', 'School'])
+            st.success(f"🎉 Found {len(final_df)} matches.")
+            st.dataframe(final_df.drop(columns=['Full_Bio']), use_container_width=True, hide_index=True)
+            
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                final_df.to_excel(writer, index=False, sheet_name="Results")
+            st.download_button("💾 DOWNLOAD EXCEL", buffer.getvalue(), f"Search_{datetime.now().date()}.xlsx", "application/vnd.ms-excel")
+        else:
+            st.warning("No matches found.")
