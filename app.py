@@ -9,7 +9,7 @@ import requests
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="Recruiting Search", page_icon="🏈", layout="wide")
 
-# Hide Streamlit elements to look like a clean tool
+# Clean UI: Hide technical footer/header
 st.markdown("""
     <style>
     header {visibility: hidden;}
@@ -20,14 +20,17 @@ st.markdown("""
 
 st.title("🏈 Recruiting Search Engine")
 
-# --- 2. SETUP & CONSTANTS ---
+# --- 2. CONSTANTS ---
 MASTER_DB_FILE = 'REC_CONS_MASTER.csv' 
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
-# Garbage phrases that mess up column alignment
-GARBAGE_PHRASES = ["Official Athletics Website", "Official Website", "Composite", "Javascript is required"]
+# Phrases that ruin column alignment - WE KILL THESE FIRST
+GARBAGE_PHRASES = [
+    "Official Athletics Website", "Official Website", "Composite", 
+    "Javascript is required", "Skip To Main Content", "Official Football Roster"
+]
 
-# --- 3. AUTO-LOAD MASTER DATA (No Button Needed) ---
+# --- 3. AUTO-LOAD MASTER DATA ---
 if "master_data" not in st.session_state:
     import pandas as pd
     
@@ -69,30 +72,39 @@ if "master_data" not in st.session_state:
 
 master_lookup, name_lookup = st.session_state["master_data"]
 
-# --- 4. SMART PARSER (The Fix for your CSV issues) ---
+# --- 4. SMART PARSER (The Fix) ---
 def parse_header_smart(bio):
     """
-    Intelligently parses the 'Name - Title - School' line, ignoring garbage.
+    Parses 'Name - Title - School' line. 
+    Crucial Fix: Removes 'Official Website' garbage so Title/School line up correctly.
     """
     extracted = {'Name': None, 'Title': None, 'School': None, 'Role': 'COACH/STAFF'}
     
-    # Clean bio lines
+    # Clean and split lines
     lines = [L.strip() for L in str(bio).replace('\r', '\n').split('\n') if L.strip()]
     
-    # Find the header line (usually line 0 or 1, containing hyphens)
+    # Find the header (Line with " - " separators)
     header = None
-    for line in lines[:5]:
+    for line in lines[:6]:
         if " - " in line and "http" not in line and "SOURCE" not in line:
             header = line
             break
             
     if header:
-        # Split by hyphen
+        # Split by separator
         parts = [p.strip() for p in header.split(' - ')]
         
-        # Remove known garbage phrases (This fixes "Official Athletics Website")
-        clean_parts = [p for p in parts if not any(g.lower() in p.lower() for g in GARBAGE_PHRASES)]
+        # REMOVE GARBAGE PARTS (This fixes the alignment!)
+        clean_parts = []
+        for p in parts:
+            is_garbage = False
+            for g in GARBAGE_PHRASES:
+                if g.lower() in p.lower():
+                    is_garbage = True
+            if not is_garbage:
+                clean_parts.append(p)
         
+        # ASSIGN COLUMNS BASED ON COUNT
         if len(clean_parts) >= 3:
             # Pattern: Name | Title | School
             extracted['Name'] = clean_parts[0]
@@ -100,22 +112,26 @@ def parse_header_smart(bio):
             extracted['School'] = clean_parts[2]
             
         elif len(clean_parts) == 2:
-            # Pattern: Name | School (Title missing)
+            # Pattern: Name | School (Title is missing)
             extracted['Name'] = clean_parts[0]
             extracted['School'] = clean_parts[1]
+            extracted['Title'] = "Staff" # Default
             
-        # PLAYER DETECTION (Fixes "2025" showing as Title)
-        # Check if Title or School looks like a year
-        for key in ['Title', 'School']:
-            val = str(extracted[key])
-            if "202" in val or "203" in val: # 2024, 2025, 2026...
-                extracted['Role'] = "PLAYER"
-                extracted['Title'] = "Roster (" + val + ")" # Move year to title
-                if key == 'School': extracted['School'] = "Unknown" # Reset if school was the year
+        elif len(clean_parts) == 1:
+            extracted['Name'] = clean_parts[0]
 
-        # GENERIC TITLE FIX
-        if str(extracted['Title']).lower() in ['football', 'athletics']:
-             extracted['Title'] = "Staff"
+        # REPAIR: If Title looks like a School, swap them
+        if extracted['Title'] and "University" in extracted['Title']:
+            temp = extracted['School']
+            extracted['School'] = extracted['Title']
+            extracted['Title'] = temp if temp else "Staff"
+
+        # REPAIR: Player Detection
+        # If "2025" or "Football" ends up in Title/School, it's a player
+        for val in [str(extracted['Title']), str(extracted['School'])]:
+            if "202" in val or "203" in val: # 2024, 2025...
+                extracted['Role'] = "PLAYER"
+                extracted['Title'] = "Roster Member"
 
     return extracted
 
@@ -129,19 +145,19 @@ def get_snippet(text, keyword):
     return f"...{clean[:100]}..."
 
 # --- 5. SEARCH LOGIC ---
-keywords_str = st.text_input("Enter Keywords:", placeholder="e.g. tallahassee, area recruiter")
+keywords_str = st.text_input("Enter Search Keywords:", placeholder="e.g. tallahassee, area recruiter")
 
 if st.button("Run Search") or keywords_str:
     if not keywords_str:
         st.warning("Please enter a keyword.")
     else:
-        import pandas as pd # Import here to keep startup fast
+        import pandas as pd
         
         keywords = [k.strip() for k in keywords_str.split(',') if k.strip()]
         chunk_files = glob.glob("chunk_*.csv")
         
         if not chunk_files:
-            st.error("No database files found.")
+            st.error("System Error: No database files found.")
         else:
             # Sort files
             try: chunk_files.sort(key=lambda x: int(re.search(r'\d+', x).group()))
@@ -154,8 +170,7 @@ if st.button("Run Search") or keywords_str:
                 progress_bar.progress((i + 1) / len(chunk_files))
                 
                 try:
-                    # Read only necessary columns first if possible, or robust read
-                    # We use on_bad_lines='skip' to prevent crashing on bad CSV rows
+                    # Robust Read
                     df_iter = pd.read_csv(file, chunksize=1000, on_bad_lines='skip', dtype=str)
                     
                     for chunk in df_iter:
@@ -213,9 +228,8 @@ if st.button("Run Search") or keywords_str:
                                 if match:
                                     if not email: email = match['email']
                                     if not twitter: twitter = match['twitter']
-                                    # Prefer Master DB title if generic
                                     if title in ["Staff", "Unknown", "Football"]: title = match['title']
-                                    school = match['school'] # Use clean name
+                                    school = match['school']
                                 
                                 return pd.Series([role, name, title, school, email, twitter, row['Full_Bio']])
 
@@ -223,13 +237,13 @@ if st.button("Run Search") or keywords_str:
                             enriched = found.apply(clean_and_fill, axis=1)
                             enriched.columns = ['Role', 'Name', 'Title', 'School', 'Email', 'Twitter', 'Full_Bio']
                             
-                            # Add snippet
+                            # Snippet
                             enriched['Context_Snippet'] = enriched['Full_Bio'].apply(lambda x: get_snippet(x, keywords[0]))
                             
                             results.append(enriched)
                             
                     del chunk
-                    gc.collect() # Memory safety
+                    gc.collect()
                     
                 except: continue
 
@@ -239,14 +253,14 @@ if st.button("Run Search") or keywords_str:
                 final_df = pd.concat(results)
                 
                 # --- FINAL SORT & LAYOUT ---
-                # 1. Clean Garbage
+                # 1. Clean Garbage Rows
                 final_df = final_df[~final_df['Name'].str.contains("Skip To|Official|Javascript", case=False, na=False)]
                 final_df.dropna(subset=['Name'], inplace=True)
                 
                 # 2. Sort: School -> Role -> Name
                 final_df.sort_values(by=['School', 'Role', 'Name'], ascending=[True, True, True], inplace=True)
                 
-                # 3. Column Order
+                # 3. Exact Column Order
                 cols = ['Role', 'Name', 'Title', 'School', 'Email', 'Twitter', 'Context_Snippet', 'Full_Bio']
                 final_df = final_df[cols]
                 
