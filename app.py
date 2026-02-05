@@ -117,10 +117,7 @@ def load_lookup():
             first = get_val(row, 'first name', 'first')
             last = get_val(row, 'last name', 'last')
             email = get_val(row, 'email', 'email address')
-            
-            # --- SPECIFICALLY LOOKING FOR "Individual's Twitter" ---
             twitter = get_val(row, "individual's twitter", 'twitter', 'x', 'twitter handle')
-            
             title = get_val(row, 'title')
             
             if school and (first or last):
@@ -240,8 +237,7 @@ if submit_button and keywords_str:
         if results_found:
             df_res = pd.DataFrame(results_found).drop_duplicates(subset=['Name', 'School'])
             
-            # --- FLATTEN FULL BIO FOR EXPORT ---
-            # This line removes all Enter keys so rows stay short in Excel
+            # --- FLATTEN FULL BIO ---
             df_res['Full_Bio'] = df_res['Full_Bio'].astype(str).str.replace(r'[\r\n]+', ' ', regex=True)
             
             # Sort by Role then Name
@@ -268,13 +264,18 @@ if not st.session_state['search_results'].empty:
         hide_index=True
     )
     
-    # Download Button
+    # Download Button with Custom Column Widths
     safe_kw = re.sub(r'[^a-zA-Z0-9]', '_', st.session_state['last_keywords'][:20])
     file_name_dynamic = f"Search_{safe_kw}_{datetime.now().date()}.xlsx"
     
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         final_df.to_excel(writer, index=False, sheet_name="Results")
+        
+        # --- WIDEN COLUMNS ---
+        worksheet = writer.sheets['Results']
+        # Set columns A through F (0 to 5) to width 30
+        worksheet.set_column(0, 5, 30)
     
     st.download_button(
         label="💾 DOWNLOAD EXCEL",
