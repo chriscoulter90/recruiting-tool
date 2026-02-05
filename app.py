@@ -7,26 +7,24 @@ import io
 import requests
 import pandas as pd
 from datetime import datetime
+from collections import Counter
 
-# --- 1. APPLE + FOOTBALL UI CONFIGURATION ---
+# --- 1. UI CONFIGURATION ---
 st.set_page_config(page_title="Coulter Recruiting", page_icon="🏈", layout="wide")
 
-# Custom CSS for the "Apple Clean" look with Football accents
 st.markdown("""
     <style>
-    /* Global Font - San Francisco Style */
+    /* Global Font */
     html, body, [class*="css"] {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        background-color: #F5F5F7; /* Apple Off-White */
+        background-color: #F5F5F7; 
         color: #1D1D1F;
     }
-    
-    /* Hide Streamlit Header/Footer */
     header {visibility: hidden;}
     footer {visibility: hidden;}
     .block-container {padding-top: 2rem;}
 
-    /* HEADER: The "Football Field" Effect */
+    /* HEADER */
     .header-container {
         background: linear-gradient(90deg, #002B5C 0%, #003B7E 100%);
         padding: 40px;
@@ -34,64 +32,22 @@ st.markdown("""
         text-align: center;
         box-shadow: 0 10px 30px rgba(0,0,0,0.1);
         margin-bottom: 40px;
-        border-bottom: 5px solid #4CAF50; /* Turf Green Accent */
+        border-bottom: 5px solid #4CAF50;
     }
-    .main-title {
-        font-size: 3rem;
-        font-weight: 800;
-        color: #FFFFFF;
-        margin: 0;
-        letter-spacing: -1px;
-    }
-    .sub-title {
-        font-size: 1.2rem;
-        font-weight: 400;
-        color: #A3C9F7;
-        margin-top: 5px;
-        text-transform: uppercase;
-        letter-spacing: 2px;
-    }
+    .main-title { font-size: 3rem; font-weight: 800; color: #FFFFFF; margin: 0; letter-spacing: -1px; }
+    .sub-title { font-size: 1.2rem; font-weight: 400; color: #A3C9F7; margin-top: 5px; text-transform: uppercase; letter-spacing: 2px; }
 
-    /* SEARCH BAR: Clean & Minimal */
+    /* INPUT & BUTTONS */
     .stTextInput > div > div > input {
-        border-radius: 12px;
-        border: 1px solid #D1D1D6;
-        padding: 15px 20px;
-        font-size: 18px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-        transition: all 0.3s ease;
+        border-radius: 12px; border: 1px solid #D1D1D6; padding: 15px 20px; font-size: 18px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);
     }
-    .stTextInput > div > div > input:focus {
-        border-color: #007AFF; /* Apple Blue */
-        box-shadow: 0 0 0 3px rgba(0,122,255,0.2);
-    }
-
-    /* BUTTON: Premium Feel */
     .stButton > button {
-        background-color: #1D1D1F;
-        color: white;
-        border-radius: 12px;
-        padding: 15px 30px;
-        font-weight: 600;
-        border: none;
-        width: 100%;
-        transition: transform 0.1s ease;
+        background-color: #1D1D1F; color: white; border-radius: 12px; padding: 15px 30px; font-weight: 600; border: none; width: 100%;
     }
-    .stButton > button:hover {
-        transform: scale(1.02);
-        background-color: #333;
-    }
-    
-    /* DATAFRAME: Clean Table */
-    .stDataFrame {
-        border-radius: 15px;
-        overflow: hidden;
-        border: 1px solid #E5E5EA;
-    }
+    .stButton > button:hover { transform: scale(1.02); background-color: #333; }
     </style>
     """, unsafe_allow_html=True)
 
-# Render Header
 st.markdown("""
     <div class="header-container">
         <div class="main-title">COULTER RECRUITING</div>
@@ -103,14 +59,23 @@ st.markdown("""
 MASTER_DB_FILE = 'REC_CONS_MASTER.csv' 
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
-# STRICT Forbidden List (Matches Local)
-FORBIDDEN_SPORTS = [
-    "Volleyball", "Baseball", "Softball", "Soccer", "Tennis", "Golf", 
-    "Swimming", "Lacrosse", "Hockey", "Wrestling", "Gymnastics", 
-    "Basketball", "Track & Field", "Crew", "Rowing", "Sailing", 
-    "Acrobatics", "Tumbling", "Cheerleading", "Fencing", "Spirit Squad",
-    "Women's Basketball", "Men's Basketball"
+# A. KEYWORDS FOR CONTEXT SCANNING
+FOOTBALL_INDICATORS = [
+    "football", "quarterback", "linebacker", "touchdown", "nfl", "bowl", 
+    "offensive", "defensive", "special teams", "recruiting", "fbs", "fcs",
+    "interception", "sackle", "gridiron", "playoff", "super bowl", "pro bowl"
 ]
+
+NON_FOOTBALL_INDICATORS = {
+    "Volleyball": ["volleyball", "set", "spike", "libero", "dig", "kill", "block"],
+    "Baseball": ["baseball", "inning", "homerun", "pitcher", "dugout", "mlb", "batting"],
+    "Basketball": ["basketball", "nba", "dunk", "rebound", "three-pointer", "court"],
+    "Soccer": ["soccer", "goal", "midfielder", "striker", "goalkeeper", "fifa"],
+    "Softball": ["softball", "pitcher", "inning"],
+    "Track": ["track", "sprint", "hurdle", "relay", "marathon"],
+    "Swimming": ["swim", "dive", "freestyle", "breaststroke", "pool"],
+    "Lacrosse": ["lacrosse", "stick", "goalie", "crease"]
+}
 
 GARBAGE_PHRASES = [
     "Official Athletics Website", "Official Website", "Composite", 
@@ -118,18 +83,21 @@ GARBAGE_PHRASES = [
     "View Full Profile", "Related Headlines", "Source:", "https://"
 ]
 
-# THE TRANSLATOR (Fixes the Handshake Issue)
+# THE TRANSLATOR (Maps Scraped Names to Master DB Names)
 SCHOOL_ALIASES = {
-    "ASU": "Arizona State", "Arizona State University": "Arizona State",
-    "UCF": "Central Florida", "Central Florida": "UCF",
-    "Ole Miss": "Mississippi", "Mississippi": "Ole Miss",
-    "SMU": "Southern Methodist", "Southern Methodist": "SMU",
-    "USC": "Southern California", "Southern California": "USC",
-    "LSU": "Louisiana State", "Louisiana State": "LSU",
-    "TCU": "Texas Christian", "Texas Christian": "TCU",
-    "BYU": "Brigham Young", "Brigham Young": "BYU",
-    "FSU": "Florida State", "Florida State": "FSU",
-    "Miami (FL)": "Miami", "Miami": "Miami (FL)"
+    "ASU": "Arizona State", "Arizona State University": "Arizona State", "Sun Devils": "Arizona State",
+    "UCF": "Central Florida", "Central Florida": "UCF", "Knights": "Central Florida",
+    "Ole Miss": "Mississippi", "Mississippi": "Ole Miss", "Rebels": "Mississippi",
+    "SMU": "Southern Methodist", "Southern Methodist": "SMU", "Mustangs": "Southern Methodist",
+    "USC": "Southern California", "Southern California": "USC", "Trojans": "Southern California",
+    "LSU": "Louisiana State", "Louisiana State": "LSU", "Tigers": "Louisiana State",
+    "TCU": "Texas Christian", "Texas Christian": "TCU", "Horned Frogs": "Texas Christian",
+    "BYU": "Brigham Young", "Brigham Young": "BYU", "Cougars": "Brigham Young",
+    "FSU": "Florida State", "Florida State": "FSU", "Seminoles": "Florida State",
+    "Miami (FL)": "Miami", "Miami": "Miami (FL)", "Hurricanes": "Miami (FL)",
+    "UNC": "North Carolina", "Tar Heels": "North Carolina",
+    "UGA": "Georgia", "Bulldogs": "Georgia",
+    "Bama": "Alabama", "Crimson Tide": "Alabama"
 }
 
 # --- 3. HELPER FUNCTIONS ---
@@ -174,9 +142,10 @@ def load_lookup():
                 # Also index by Alias+Name
                 for alias, real_name in SCHOOL_ALIASES.items():
                     if s_raw == real_name:
+                        # Add lookup for "ASU"+Name -> Record
                         lookup[(normalize_text(alias), n_key)] = rec
                 
-                # Index by Name Only
+                # Name only lookup (for safety check later)
                 if n_key not in name_lookup: name_lookup[n_key] = []
                 name_lookup[n_key].append(rec)
                 
@@ -187,7 +156,46 @@ if "master_data" not in st.session_state:
     st.session_state["master_data"] = load_lookup()
 master_lookup, name_lookup = st.session_state["master_data"]
 
-def parse_header_exact(bio):
+def detect_sport_context(bio):
+    """
+    Siphons through junk text and scans the history for sport keywords.
+    Returns: 'Football', 'Other', or 'Uncertain'
+    """
+    if pd.isna(bio): return "Uncertain"
+    
+    # 1. Clean Junk (Skip first 200 chars if they are just menus)
+    text = str(bio)
+    if len(text) > 500:
+        # Heuristic: The narrative usually starts after the header "junk"
+        # We search the middle-to-end of the text for keywords
+        analysis_text = text[200:].lower()
+    else:
+        analysis_text = text.lower()
+
+    # 2. Count Keywords
+    fb_score = sum(analysis_text.count(w) for w in FOOTBALL_INDICATORS)
+    
+    max_other_score = 0
+    likely_other_sport = None
+    
+    for sport, keywords in NON_FOOTBALL_INDICATORS.items():
+        score = sum(analysis_text.count(w) for w in keywords)
+        if score > max_other_score:
+            max_other_score = score
+            likely_other_sport = sport
+
+    # 3. Decision
+    if fb_score > max_other_score:
+        return "Football"
+    elif max_other_score > fb_score and max_other_score > 2:
+        return likely_other_sport # e.g., "Volleyball"
+    else:
+        # If ambiguous, check if "Football" is in the title/header explicitly
+        if "football" in text[:300].lower():
+            return "Football"
+        return "Uncertain"
+
+def parse_header_smart(bio):
     extracted = {'Name': None, 'Title': None, 'School': None, 'Role': 'COACH/STAFF'}
     clean_text = str(bio).replace('\r', '\n').replace('–', '-').replace('—', '-')
     lines = [L.strip() for L in clean_text.split('\n') if L.strip()]
@@ -214,10 +222,13 @@ def parse_header_exact(bio):
         if extracted['Title'] and any(x in str(extracted['Title']) for x in ["University", "College", "Athletics"]):
             extracted['School'], extracted['Title'] = extracted['Title'], extracted['School'] or "Staff"
 
-        # Alias Correction (e.g., ASU -> Arizona State)
-        clean_school = str(extracted['School']).strip()
-        if clean_school in SCHOOL_ALIASES:
-            extracted['School'] = SCHOOL_ALIASES[clean_school]
+        # Alias Correction (The "Bridge")
+        # Check if "ASU Sun Devils" contains "ASU", if so, map to "Arizona State"
+        raw_school = str(extracted['School']).strip()
+        for alias, real_name in SCHOOL_ALIASES.items():
+            if alias.lower() in raw_school.lower():
+                extracted['School'] = real_name
+                break
         
         # Role Detection
         for val in [str(extracted['Title']), str(extracted['School'])]:
@@ -245,7 +256,7 @@ with col2:
 
 if run_search or keywords_str:
     if not keywords_str:
-        st.warning("⚠️ Please enter a keyword to search.")
+        st.warning("⚠️ Please enter a keyword.")
     else:
         keywords = [k.strip() for k in keywords_str.split(',') if k.strip()]
         chunk_files = glob.glob("chunk_*.csv")
@@ -265,7 +276,6 @@ if run_search or keywords_str:
                     df_iter = pd.read_csv(file, chunksize=1000, on_bad_lines='skip', dtype=str)
                     for chunk in df_iter:
                         chunk.fillna("", inplace=True)
-                        # Normalize Columns
                         col_map = {}
                         for c in chunk.columns:
                             c_clean = c.strip()
@@ -282,7 +292,8 @@ if run_search or keywords_str:
                             found = chunk[mask].copy()
                             
                             def enrich_row(row):
-                                meta = parse_header_exact(row['Full_Bio'])
+                                # 1. Parse & Normalize Header
+                                meta = parse_header_smart(row['Full_Bio'])
                                 
                                 name = row.get('Name', '')
                                 if not name or name == "Unknown" or len(name) < 3: name = meta['Name'] or name
@@ -295,24 +306,29 @@ if run_search or keywords_str:
                                 
                                 role = meta['Role']
 
-                                # Forbidden Sport Filter
-                                blob = (str(title) + " " + str(school) + " " + str(row['Full_Bio'])[:200]).lower()
-                                for sport in FORBIDDEN_SPORTS:
-                                    if sport.lower() in blob and "football" not in blob: return None
+                                # 2. CONTENT-BASED SPORT DETECTION (The "Siphon")
+                                detected_sport = detect_sport_context(row['Full_Bio'])
+                                if detected_sport != "Football" and detected_sport != "Uncertain":
+                                    return None # Skip Non-Football
 
-                                # Master Lookup (With Alias Support)
+                                # 3. Safe Handshake (Name + School)
+                                # Try Strict Match first (Normalized)
                                 match = master_lookup.get((normalize_text(school), normalize_text(name)))
                                 
-                                # Fallback: Name Only Match
+                                # If no strict match, check if we have a valid Alias in the school name
                                 if not match:
                                     cands = name_lookup.get(normalize_text(name), [])
-                                    if len(cands) == 1: match = cands[0]
-                                    elif len(cands) > 1:
-                                        # Fuzzy School Check
-                                        ns = normalize_text(school)
-                                        for c in cands:
-                                            if normalize_text(c['school']) in ns or ns in normalize_text(c['school']):
-                                                match = c; break
+                                    # Loop through candidates for this name
+                                    for c in cands:
+                                        # Check if the Master DB school is "inside" the scraped school
+                                        # e.g. "Arizona State" is inside "ASU Sun Devils" (because we Aliased it)
+                                        # or "Arizona State" is inside "Arizona State University"
+                                        n_master = normalize_text(c['school'])
+                                        n_scraped = normalize_text(school)
+                                        
+                                        if n_master in n_scraped or n_scraped in n_master:
+                                            match = c
+                                            break
                                 
                                 email = row.get('Email', '')
                                 twitter = row.get('Twitter', '')
@@ -321,9 +337,8 @@ if run_search or keywords_str:
                                 if match:
                                     if not email: email = match['email']
                                     if not twitter: twitter = match['twitter']
-                                    # Fix generic titles using Master DB
                                     if title in ["Staff", "Unknown", "Football"]: title = match['title']
-                                    school = match['school'] # Use Clean School Name
+                                    school = match['school'] # Canonical Name
                                 
                                 flat_bio = str(row['Full_Bio']).replace('\n', ' ').replace('\r', ' ').strip()
                                 flat_bio = re.sub(r'\s+', ' ', flat_bio)
@@ -347,18 +362,15 @@ if run_search or keywords_str:
                 final_df = final_df[~final_df['Name'].str.contains("Skip To|Official|Javascript", case=False, na=False)]
                 final_df.dropna(subset=['Name'], inplace=True)
                 
-                # Sort: Role -> School -> Name
                 final_df['Role_Sort'] = final_df['Role'].apply(lambda x: 1 if "PLAYER" in str(x).upper() else 0)
                 final_df.sort_values(by=['Role_Sort', 'School', 'Name'], ascending=[True, True, True], inplace=True)
                 
-                # Column Order: Snippet BEFORE Full Bio
                 cols = ['Role', 'Name', 'Title', 'School', 'Sport', 'Email', 'Twitter', 'Context_Snippet', 'Full_Bio']
                 final_df = final_df[cols]
                 
                 st.success(f"🎉 Found {len(final_df)} matches.")
                 st.dataframe(final_df, use_container_width=True)
                 
-                # Filename: tallahassee_2026-02-05.xlsx
                 safe_kw = keywords[0].replace(' ', '_')
                 date_str = datetime.now().strftime("%Y-%m-%d")
                 file_name = f"{safe_kw}_{date_str}.xlsx"
