@@ -5,8 +5,9 @@ import re
 import gc
 import io
 import requests
+import pandas as pd
 
-# --- 1. CONFIGURATION ---
+# --- 1. UI CONFIGURATION ---
 st.set_page_config(page_title="Coulter Recruiting", page_icon="🏈", layout="wide")
 
 st.markdown("""
@@ -14,19 +15,41 @@ st.markdown("""
     header {visibility: hidden;}
     footer {visibility: hidden;}
     .block-container {padding-top: 1rem;}
-    .title-text { text-align: center; font-size: 3rem; font-weight: 700; color: #002B5C; margin-bottom: 0; }
-    .subtitle-text { text-align: center; font-size: 1.2rem; color: #666; margin-top: -10px; margin-bottom: 30px; }
+    /* Flashy Title */
+    .title-text {
+        text-align: center;
+        font-size: 3.5rem;
+        font-weight: 800;
+        color: #002B5C;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 0;
+    }
+    .subtitle-text {
+        text-align: center;
+        font-size: 1.2rem;
+        font-weight: 500;
+        color: #B3A369;
+        margin-top: -10px;
+        margin-bottom: 40px;
+        letter-spacing: 3px;
+    }
+    .stTextInput>div>div>input {
+        border: 2px solid #002B5C;
+        border-radius: 5px;
+        padding: 10px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
 st.markdown('<div class="title-text">COULTER RECRUITING</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitle-text">FOOTBALL SEARCH ENGINE</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitle-text">SEARCH ENGINE</div>', unsafe_allow_html=True)
 
-# --- 2. CONSTANTS (MATCHING LOCAL SCRIPT) ---
+# --- 2. CONSTANTS (EXACT MATCH TO LOCAL) ---
 MASTER_DB_FILE = 'REC_CONS_MASTER.csv' 
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
-# Exact list from your local script
+# From your RecruitingApp.py
 FORBIDDEN_SPORTS = [
     "Volleyball", "Baseball", "Softball", "Soccer", "Tennis", "Golf", 
     "Swimming", "Lacrosse", "Hockey", "Wrestling", "Gymnastics", 
@@ -41,56 +64,69 @@ GARBAGE_PHRASES = [
     "View Full Profile", "Related Headlines", "Source:", "https://"
 ]
 
-# --- 3. AUTO-LOAD MASTER DATA ---
+SCHOOL_CORRECTIONS = {
+    "Boston": "Boston College",
+    "Miami": "Miami (FL)",
+    "Ole": "Ole Miss",
+    "Central Methodist": "Central Methodist University",
+    "University of Auburn": "Auburn University"
+}
+
+# --- 3. HELPER FUNCTIONS (THE "BRAIN") ---
+
+# CRITICAL: This must match your local script exactly to get the same matches
+def normalize_text(text):
+    if pd.isna(text): return ""
+    text = str(text).lower()
+    # Remove specific words that cause mismatch (State, University, etc)
+    for word in ['university', 'univ', 'college', 'state', 'the', 'of', 'athletics', 'inst']:
+        text = text.replace(word, '')
+    return re.sub(r'[^a-z0-9]', '', text).strip()
+
+@st.cache_data(show_spinner=False)
+def load_lookup():
+    try:
+        if not os.path.exists(MASTER_DB_FILE):
+            r = requests.get(GOOGLE_SHEET_CSV_URL, timeout=5)
+            with open(MASTER_DB_FILE, 'wb') as f: f.write(r.content)
+        
+        try: df = pd.read_csv(MASTER_DB_FILE, encoding='utf-8')
+        except: df = pd.read_csv(MASTER_DB_FILE, encoding='latin1')
+        
+        lookup, name_lookup = {}, {}
+        cols = df.columns
+        email_col = next((c for c in cols if 'Email' in c), None)
+        twitter_col = next((c for c in cols if 'Twitter' in c), None)
+        title_col = next((c for c in cols if 'Title' in c), None)
+        
+        for _, row in df.iterrows():
+            s_key = normalize_text(row.get('School', ''))
+            n_key = normalize_text(f"{row.get('First name', '')}{row.get('Last name', '')}")
+            if n_key:
+                rec = {
+                    'email': str(row.get(email_col, '')).strip() if email_col else "",
+                    'twitter': str(row.get(twitter_col, '')).strip() if twitter_col else "",
+                    'title': str(row.get(title_col, '')).strip() if title_col else "",
+                    'school': str(row.get('School', '')).strip()
+                }
+                lookup[(s_key, n_key)] = rec
+                if n_key not in name_lookup: name_lookup[n_key] = []
+                name_lookup[n_key].append(rec)
+        return lookup, name_lookup
+    except: return {}, {}
+
+# Initialize Data
 if "master_data" not in st.session_state:
-    import pandas as pd
-    
-    @st.cache_data(show_spinner=False)
-    def load_lookup():
-        try:
-            if not os.path.exists(MASTER_DB_FILE):
-                r = requests.get(GOOGLE_SHEET_CSV_URL, timeout=5)
-                with open(MASTER_DB_FILE, 'wb') as f: f.write(r.content)
-            
-            try: df = pd.read_csv(MASTER_DB_FILE, encoding='utf-8')
-            except: df = pd.read_csv(MASTER_DB_FILE, encoding='latin1')
-            
-            lookup, name_lookup = {}, {}
-            cols = df.columns
-            email_col = next((c for c in cols if 'Email' in c), None)
-            twitter_col = next((c for c in cols if 'Twitter' in c), None)
-            title_col = next((c for c in cols if 'Title' in c), None)
-            
-            def norm(t): return re.sub(r'[^a-z0-9]', '', str(t).lower())
-
-            for _, row in df.iterrows():
-                s_key = norm(row.get('School', ''))
-                n_key = norm(f"{row.get('First name', '')}{row.get('Last name', '')}")
-                if n_key:
-                    rec = {
-                        'email': str(row.get(email_col, '')).strip() if email_col else "",
-                        'twitter': str(row.get(twitter_col, '')).strip() if twitter_col else "",
-                        'title': str(row.get(title_col, '')).strip() if title_col else "",
-                        'school': str(row.get('School', '')).strip()
-                    }
-                    lookup[(s_key, n_key)] = rec
-                    if n_key not in name_lookup: name_lookup[n_key] = []
-                    name_lookup[n_key].append(rec)
-            return lookup, name_lookup
-        except: return {}, {}
-    
     st.session_state["master_data"] = load_lookup()
-
 master_lookup, name_lookup = st.session_state["master_data"]
 
-# --- 4. LOGIC FUNCTIONS (MAC PARITY) ---
 def parse_header_exact(bio):
     extracted = {'Name': None, 'Title': None, 'School': None, 'Role': 'COACH/STAFF'}
     
     # Normalize Dashes (Mac vs Cloud Fix)
     clean_text = str(bio).replace('\r', '\n').replace('–', '-').replace('—', '-')
-    
     lines = [L.strip() for L in clean_text.split('\n') if L.strip()]
+    
     header = None
     for line in lines[:8]:
         if " - " in line and "http" not in line and "SOURCE" not in line:
@@ -117,11 +153,17 @@ def parse_header_exact(bio):
         elif len(clean_parts) == 1:
             extracted['Name'] = clean_parts[0]
 
+        # Fix Swaps
         if extracted['Title'] and ("University" in extracted['Title'] or "College" in extracted['Title']):
             temp = extracted['School']
             extracted['School'] = extracted['Title']
             extracted['Title'] = temp if temp else "Staff"
 
+        # Manual Corrections (From Local Script)
+        if extracted['School'] in SCHOOL_CORRECTIONS:
+            extracted['School'] = SCHOOL_CORRECTIONS[extracted['School']]
+
+        # Player Detection
         for val in [str(extracted['Title']), str(extracted['School'])]:
             if "202" in val or "203" in val:
                 extracted['Role'] = "PLAYER"
@@ -150,8 +192,6 @@ if run_search or keywords_str:
     if not keywords_str:
         st.warning("Please enter a keyword.")
     else:
-        import pandas as pd
-        
         keywords = [k.strip() for k in keywords_str.split(',') if k.strip()]
         chunk_files = glob.glob("chunk_*.csv")
         
@@ -189,7 +229,7 @@ if run_search or keywords_str:
                             found = chunk[mask].copy()
                             
                             def clean_and_fill(row):
-                                # 1. Parse Header
+                                # 1. Parse
                                 meta = parse_header_exact(row['Full_Bio'])
                                 
                                 name = row.get('Name', '')
@@ -203,40 +243,47 @@ if run_search or keywords_str:
                                 
                                 role = meta['Role']
 
-                                # 2. Forbidden Sport Check (From Local Script)
+                                # 2. Forbidden Sport Check
                                 header_check = (str(title) + " " + str(school) + " " + str(row['Full_Bio'])[:200]).lower()
                                 for sport in FORBIDDEN_SPORTS:
                                     if sport.lower() in header_check and "football" not in header_check:
                                         return None # DROP ROW
 
-                                # 3. Master Lookup
-                                def n(t): return re.sub(r'[^a-z0-9]', '', str(t).lower())
-                                match = master_lookup.get((n(school), n(name)))
+                                # 3. Master Lookup (Matching Local Logic)
+                                match = None
+                                match = master_lookup.get((normalize_text(school), normalize_text(name)))
+                                
                                 if not match:
-                                    candidates = name_lookup.get(n(name), [])
-                                    if len(candidates) == 1: match = candidates[0]
+                                    candidates = name_lookup.get(normalize_text(name), [])
+                                    if len(candidates) == 1: 
+                                        match = candidates[0]
                                     elif len(candidates) > 1:
+                                        # Fuzzy School Match inside Candidates
+                                        n_school = normalize_text(school)
                                         for cand in candidates:
-                                            if n(cand['school']) in n(school) or n(school) in n(cand['school']):
+                                            n_cand = normalize_text(cand['school'])
+                                            if n_cand in n_school or n_school in n_cand:
                                                 match = cand; break
                                 
                                 email = row.get('Email', '')
                                 twitter = row.get('Twitter', '')
+                                sport_val = "Football" # Default
                                 
                                 if match:
                                     if not email: email = match['email']
                                     if not twitter: twitter = match['twitter']
                                     if title in ["Staff", "Unknown", "Football"]: title = match['title']
-                                    school = match['school']
+                                    school = match['school'] # Use Master DB School Name
                                 
+                                # Flatten Bio
                                 flat_bio = str(row['Full_Bio']).replace('\n', ' ').replace('\r', ' ').strip()
                                 flat_bio = re.sub(r'\s+', ' ', flat_bio)
                                 
-                                return pd.Series([role, name, title, school, "Football", email, twitter, flat_bio])
+                                return pd.Series([role, name, title, school, sport_val, email, twitter, flat_bio])
 
                             enriched = found.apply(clean_and_fill, axis=1)
                             
-                            # Drop None rows (Forbidden sports)
+                            # Drop dropped rows (Forbidden sports)
                             enriched.dropna(how='all', inplace=True) 
                             
                             if not enriched.empty:
@@ -257,12 +304,12 @@ if run_search or keywords_str:
                 final_df = final_df[~final_df['Name'].str.contains("Skip To|Official|Javascript", case=False, na=False)]
                 final_df.dropna(subset=['Name'], inplace=True)
                 
-                # Sort: Role -> School -> Name
+                # Sort: Role (Coach=0, Player=1) -> School -> Name
                 final_df['Role_Sort'] = final_df['Role'].apply(lambda x: 1 if "PLAYER" in str(x).upper() else 0)
                 final_df.sort_values(by=['Role_Sort', 'School', 'Name'], ascending=[True, True, True], inplace=True)
                 final_df.drop(columns=['Role_Sort'], inplace=True)
                 
-                # Column Order (MATCHING LOCAL EXACTLY)
+                # EXACT COLUMN ORDER FROM LOCAL FILE
                 cols = ['Role', 'Name', 'Title', 'School', 'Sport', 'Email', 'Twitter', 'Context_Snippet', 'Full_Bio']
                 final_df = final_df[cols]
                 
