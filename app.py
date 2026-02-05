@@ -9,46 +9,92 @@ import pandas as pd
 from datetime import datetime
 from collections import Counter
 
-# --- 1. UI CONFIGURATION ---
+# --- 1. UI CONFIGURATION (RED & BLACK THEME) ---
 st.set_page_config(page_title="Coulter Recruiting", page_icon="🏈", layout="wide")
 
 st.markdown("""
     <style>
+    /* Global Font */
     html, body, [class*="css"] {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        background-color: #F5F5F7; 
-        color: #1D1D1F;
+        background-color: #FAFAFA; 
+        color: #111111;
     }
     header {visibility: hidden;}
     footer {visibility: hidden;}
     .block-container {padding-top: 2rem;}
 
+    /* HEADER: Red & Black Gradient */
     .header-container {
-        background: linear-gradient(90deg, #002B5C 0%, #003B7E 100%);
-        padding: 40px;
-        border-radius: 20px;
+        background: linear-gradient(135deg, #8B0000 0%, #1A1A1A 100%);
+        padding: 45px;
+        border-radius: 15px;
         text-align: center;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        box-shadow: 0 10px 30px rgba(0,0,0,0.2);
         margin-bottom: 40px;
-        border-bottom: 5px solid #4CAF50;
+        border-bottom: 6px solid #000000;
+        color: white;
     }
-    .main-title { font-size: 3rem; font-weight: 800; color: #FFFFFF; margin: 0; letter-spacing: -1px; }
-    .sub-title { font-size: 1.2rem; font-weight: 400; color: #A3C9F7; margin-top: 5px; text-transform: uppercase; letter-spacing: 2px; }
+    .main-title { 
+        font-size: 3.5rem; 
+        font-weight: 900; 
+        color: #FFFFFF; 
+        margin: 0; 
+        letter-spacing: -1px; 
+        text-transform: uppercase;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+    }
+    .sub-title { 
+        font-size: 1.3rem; 
+        font-weight: 500; 
+        color: #E0E0E0; 
+        margin-top: 5px; 
+        text-transform: uppercase; 
+        letter-spacing: 3px; 
+    }
 
+    /* INPUT FIELD */
     .stTextInput > div > div > input {
-        border-radius: 12px; border: 1px solid #D1D1D6; padding: 15px 20px; font-size: 18px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        border-radius: 8px; 
+        border: 2px solid #E0E0E0; 
+        padding: 15px 20px; 
+        font-size: 18px; 
+        color: #333;
+        background-color: #FFF;
+        transition: all 0.3s ease;
     }
+    .stTextInput > div > div > input:focus {
+        border-color: #8B0000;
+        box-shadow: 0 0 0 3px rgba(139, 0, 0, 0.1);
+    }
+
+    /* BUTTON: Red Gradient */
     .stButton > button {
-        background-color: #1D1D1F; color: white; border-radius: 12px; padding: 15px 30px; font-weight: 600; border: none; width: 100%;
+        background: linear-gradient(90deg, #B22222 0%, #800000 100%);
+        color: white;
+        border-radius: 8px;
+        padding: 15px 30px;
+        font-weight: 700;
+        border: none;
+        width: 100%;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        transition: transform 0.1s ease;
     }
-    .stButton > button:hover { transform: scale(1.02); background-color: #333; }
+    .stButton > button:hover {
+        transform: scale(1.02);
+        box-shadow: 0 5px 15px rgba(139, 0, 0, 0.3);
+    }
+    
+    /* DATAFRAME CLEANUP */
+    .stDataFrame { border: 1px solid #ddd; border-radius: 8px; }
     </style>
     """, unsafe_allow_html=True)
 
 st.markdown("""
     <div class="header-container">
-        <div class="main-title">COULTER RECRUITING</div>
-        <div class="sub-title">Elite Football Search Engine</div>
+        <div class="main-title">🏈 COULTER RECRUITING</div>
+        <div class="sub-title">Elite Search Engine</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -56,13 +102,14 @@ st.markdown("""
 MASTER_DB_FILE = 'REC_CONS_MASTER.csv' 
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
-# A. KEYWORDS FOR CONTEXT SCANNING
+# STRICTER SPORTS FILTERS
 FOOTBALL_INDICATORS = [
     "football", "quarterback", "linebacker", "touchdown", "nfl", "bowl", 
     "offensive", "defensive", "special teams", "recruiting", "fbs", "fcs",
     "interception", "tackle", "gridiron", "playoff", "super bowl", "pro bowl"
 ]
 
+# Explicitly exclude "Flag Football" and other variants
 NON_FOOTBALL_INDICATORS = {
     "Volleyball": ["volleyball", "set", "spike", "libero", "dig", "kill", "block"],
     "Baseball": ["baseball", "inning", "homerun", "pitcher", "dugout", "mlb", "batting"],
@@ -71,7 +118,8 @@ NON_FOOTBALL_INDICATORS = {
     "Softball": ["softball", "pitcher", "inning"],
     "Track": ["track", "sprint", "hurdle", "relay", "marathon"],
     "Swimming": ["swim", "dive", "freestyle", "breaststroke", "pool"],
-    "Lacrosse": ["lacrosse", "stick", "goalie", "crease"]
+    "Lacrosse": ["lacrosse", "stick", "goalie", "crease"],
+    "Flag Football": ["flag football", "women's flag", "flag roster"]
 }
 
 GARBAGE_PHRASES = [
@@ -80,14 +128,13 @@ GARBAGE_PHRASES = [
     "View Full Profile", "Related Headlines", "Source:", "https://"
 ]
 
-# STRICT JUNK NAME FILTER
 BAD_NAMES = [
     "Football Roster", "Football Schedule", "Men's Basketball", "Women's Basketball", 
     "Composite Schedule", "Game Recap", "Box Score", "Statistic", "Menu", "Search",
-    "Tickets", "Donate", "Camps", "Facilities", "Staff Directory", "2024", "2025", "2026"
+    "Tickets", "Donate", "Camps", "Facilities", "Staff Directory", "2024", "2025", "2026",
+    "Privacy Policy", "Terms of Service", "Accessibility", "Ad Blocker"
 ]
 
-# TITLE SCAVENGER LIST (Priority Order)
 JOB_TITLES = [
     "Head Coach", "Defensive Coordinator", "Offensive Coordinator", "Special Teams Coordinator",
     "Recruiting Coordinator", "Director of Player Personnel", "Director of Football Operations",
@@ -140,7 +187,7 @@ SCHOOL_ALIASES = {
     "UCLA": "UCLA", "Bruins": "UCLA"
 }
 
-# --- 4. DATA PROCESSING FUNCTIONS ---
+# --- 3. HELPER FUNCTIONS ---
 
 def normalize_text(text):
     if pd.isna(text): return ""
@@ -215,17 +262,19 @@ def detect_sport_context(bio):
             max_other_score = score
             likely_other_sport = sport
 
-    if fb_score >= max_other_score: return "Football"
-    elif max_other_score > fb_score and max_other_score > 2: return likely_other_sport
+    if fb_score >= max_other_score and max_other_score < 3: return "Football"
+    elif max_other_score > fb_score: return likely_other_sport
     else: return "Football" if "football" in text[:300].lower() else "Uncertain"
 
-def detect_player_by_context(bio):
+def detect_player_by_context(bio, title):
     """
-    Checks bio for player indicators (height, weight, class year) to prevent
-    players from being mislabeled as staff.
+    Scans bio for player markers.
     """
-    text = str(bio).lower()[:600]
+    text = str(bio).lower()[:800]
     
+    # 0. Header Hints
+    if "roster" in str(title).lower(): return True
+
     # 1. Class Year Indicators
     if any(x in text for x in ["freshman", "sophomore", "junior", "senior", "redshirt", "class of 20"]):
         return True
@@ -234,10 +283,17 @@ def detect_player_by_context(bio):
     if re.search(r"\d['’]-?\d+\"?\s+\d{2,3}\s?lbs", text):
         return True
         
-    # 3. Position Abbreviations (QB, WR, LB, etc) followed by height/weight
-    if re.search(r"\b(qb|wr|rb|te|ol|dl|lb|db|saf|cb|pk|p|ls)\b", text) and "lbs" in text:
-        return True
-        
+    # 3. Position Abbreviations followed by hometown/high school context
+    if re.search(r"\b(qb|wr|rb|te|ol|dl|lb|db|saf|cb|pk|p|ls)\b", text):
+        if "hometown" in text or "high school" in text:
+            return True
+            
+    # 4. Action Keywords for Players
+    if "punt" in text or "kick" in text or "rushing" in text or "tackle" in text:
+        # Avoid coaches who "coached punters"
+        if "coach" not in str(title).lower():
+            return True
+
     return False
 
 def extract_title_from_text(bio):
@@ -300,7 +356,7 @@ def get_snippet(text, keyword):
         return f"...{clean[s:e].strip()}..."
     return f"...{clean[:100]}..."
 
-# --- 5. SEARCH LOGIC ---
+# --- 4. SEARCH LOGIC ---
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     keywords_str = st.text_input("", placeholder="🔍 Search Database (e.g. Tallahassee, Quarterback)...")
@@ -344,14 +400,14 @@ if run_search or keywords_str:
                             found = chunk[mask].copy()
                             
                             def enrich_row(row):
-                                # 1. Parse Header
                                 meta = parse_header_smart(row['Full_Bio'])
+                                
                                 name = row.get('Name', '')
                                 if not name or name == "Unknown" or len(name) < 3: name = meta['Name'] or name
                                 
-                                # 2. JUNK FILTER (Fix for "Roster" names)
+                                # BAD NAME FILTER
                                 if any(bad.lower() in str(name).lower() for bad in BAD_NAMES): return None
-                                if len(str(name)) > 40 or len(str(name)) < 3: return None
+                                if len(str(name)) > 40: return None
 
                                 school = row.get('School', '')
                                 if not school or school == "Unknown": school = meta['School'] or school
@@ -361,23 +417,25 @@ if run_search or keywords_str:
                                 
                                 role = meta['Role']
 
-                                # 3. Player Detector (Fix for Alabama Players)
-                                if role == "COACH/STAFF":
-                                    if detect_player_by_context(row['Full_Bio']):
-                                        role = "PLAYER"
-                                        title = "Roster Member"
-
-                                # 4. Sport Siphon
+                                # SPORT SIPHON
                                 detected_sport = detect_sport_context(row['Full_Bio'])
                                 if detected_sport != "Football" and detected_sport != "Uncertain":
                                     return None 
 
-                                # 5. Title Scavenger
+                                # PLAYER DETECTOR (Deep Context Check)
+                                if role == "COACH/STAFF":
+                                    if detect_player_by_context(row['Full_Bio'], title):
+                                        role = "PLAYER"
+                                        title = "Roster Member"
+                                        # If Title was "Football", change to Roster Member
+                                        if "football" in str(title).lower(): title = "Roster Member"
+
+                                # Title Scavenger
                                 if title == "Staff" or title == "Unknown":
                                     scavenged_title = extract_title_from_text(row['Full_Bio'])
                                     if scavenged_title != "Staff": title = scavenged_title
 
-                                # 6. Matchmaking
+                                # Matchmaking
                                 match = master_lookup.get((normalize_text(school), normalize_text(name)))
                                 if not match:
                                     cands = name_lookup.get(normalize_text(name), [])
