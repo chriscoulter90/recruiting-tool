@@ -7,24 +7,21 @@ import io
 import requests
 import pandas as pd
 from datetime import datetime
-from collections import Counter
 
 # --- 1. UI CONFIGURATION ---
 st.set_page_config(page_title="Coulter Recruiting", page_icon="🏈", layout="wide")
 
 st.markdown("""
     <style>
-    /* Global Font */
     html, body, [class*="css"] {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        background-color: #F5F5F7; 
-        color: #1D1D1F;
+        background-color: #FAFAFA; 
+        color: #111111;
     }
     header {visibility: hidden;}
     footer {visibility: hidden;}
     .block-container {padding-top: 2rem;}
 
-    /* HEADER: Red & Black Gradient */
     .header-container {
         background: linear-gradient(135deg, #8B0000 0%, #1A1A1A 100%);
         padding: 45px;
@@ -53,7 +50,6 @@ st.markdown("""
         letter-spacing: 3px; 
     }
 
-    /* INPUT FIELD */
     .stTextInput > div > div > input {
         border-radius: 8px; border: 2px solid #E0E0E0; padding: 15px 20px; font-size: 18px; 
         color: #333; background-color: #FFF; transition: all 0.3s ease;
@@ -62,7 +58,6 @@ st.markdown("""
         border-color: #8B0000; box-shadow: 0 0 0 3px rgba(139, 0, 0, 0.1);
     }
 
-    /* BUTTON: Red Gradient */
     .stButton > button {
         background: linear-gradient(90deg, #B22222 0%, #800000 100%);
         color: white; border-radius: 8px; padding: 15px 30px; font-weight: 700; 
@@ -87,7 +82,7 @@ st.markdown("""
 MASTER_DB_FILE = 'REC_CONS_MASTER.csv' 
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
-# A. KEYWORDS FOR CONTEXT SCANNING
+# KEYWORDS
 FOOTBALL_INDICATORS = [
     "football", "quarterback", "linebacker", "touchdown", "nfl", "bowl", 
     "offensive", "defensive", "special teams", "recruiting", "fbs", "fcs",
@@ -111,19 +106,18 @@ GARBAGE_PHRASES = [
     "View Full Profile", "Related Headlines", "Source:", "https://"
 ]
 
-# POISON PILLS: If these appear in TITLE or SCHOOL, DELETE the row.
-POISON_PILLS_HEADER = [
-    "Flag", "Women's Flag", "Volleyball", "Baseball", "Softball", 
-    "Soccer", "Tennis", "Golf", "Swimming", "Lacrosse", "Hockey", 
-    "Wrestling", "Gymnastics", "Basketball", "Track & Field", "Crew", 
-    "Rowing", "Sailing", "Cheerleading", "Fencing", "Spirit Squad"
+# NUCLEAR POISON PILLS
+POISON_PILLS_RAW = [
+    "Women's Flag", "Flag Football", "Men's Basketball", "Women's Basketball", 
+    "Volleyball", "Baseball", "Softball", "Soccer", "Tennis", "Golf", 
+    "Swimming", "Lacrosse", "Hockey", "Wrestling", "Gymnastics"
 ]
 
 BAD_NAMES = [
-    "Football Roster", "Football Schedule", "Men's Basketball", "Women's Basketball", 
-    "Composite Schedule", "Game Recap", "Box Score", "Statistic", "Menu", "Search",
-    "Tickets", "Donate", "Camps", "Facilities", "Staff Directory", "2024", "2025", "2026",
-    "Privacy Policy", "Terms of Service", "Accessibility", "Ad Blocker"
+    "Football Roster", "Football Schedule", "Composite Schedule", "Game Recap", 
+    "Box Score", "Statistic", "Menu", "Search", "Tickets", "Donate", "Camps", 
+    "Facilities", "Staff Directory", "2024", "2025", "2026", "Privacy Policy", 
+    "Terms of Service", "Accessibility", "Ad Blocker"
 ]
 
 JOB_TITLES = [
@@ -135,7 +129,6 @@ JOB_TITLES = [
     "Graduate Assistant", "Analyst", "Quality Control", "Director of Scouting"
 ]
 
-# DOMAIN & ALIAS MAPPING
 DOMAIN_MAP = {
     "thesundevils.com": "Arizona State", "rolltide.com": "Alabama", "auburntigers.com": "Auburn",
     "uclabruins.com": "UCLA", "usctrojans.com": "USC", "seminoles.com": "Florida State",
@@ -179,7 +172,6 @@ SCHOOL_ALIASES = {
 }
 
 # --- 3. HELPER FUNCTIONS ---
-
 def normalize_text(text):
     if pd.isna(text): return ""
     text = str(text).lower()
@@ -193,35 +185,22 @@ def load_lookup():
         if not os.path.exists(MASTER_DB_FILE):
             r = requests.get(GOOGLE_SHEET_CSV_URL, timeout=5)
             with open(MASTER_DB_FILE, 'wb') as f: f.write(r.content)
-        
         try: df = pd.read_csv(MASTER_DB_FILE, encoding='utf-8')
         except: df = pd.read_csv(MASTER_DB_FILE, encoding='latin1')
-        
         lookup, name_lookup = {}, {}
-        cols = df.columns
-        email_col = next((c for c in cols if 'Email' in c), None)
-        twitter_col = next((c for c in cols if 'Twitter' in c), None)
-        title_col = next((c for c in cols if 'Title' in c), None)
-        
+        email_col = next((c for c in df.columns if 'Email' in c), None)
+        twitter_col = next((c for c in df.columns if 'Twitter' in c), None)
+        title_col = next((c for c in df.columns if 'Title' in c), None)
         for _, row in df.iterrows():
             s_raw = str(row.get('School', '')).strip()
-            s_key = normalize_text(s_raw)
-            n_key = normalize_text(f"{row.get('First name', '')}{row.get('Last name', '')}")
-            
+            s_key, n_key = normalize_text(s_raw), normalize_text(f"{row.get('First name', '')}{row.get('Last name', '')}")
             if n_key:
-                rec = {
-                    'email': str(row.get(email_col, '')).strip() if email_col else "",
-                    'twitter': str(row.get(twitter_col, '')).strip() if twitter_col else "",
-                    'title': str(row.get(title_col, '')).strip() if title_col else "",
-                    'school': s_raw 
-                }
+                rec = {'email': str(row.get(email_col, '')).strip() if email_col else "", 'twitter': str(row.get(twitter_col, '')).strip() if twitter_col else "", 'title': str(row.get(title_col, '')).strip() if title_col else "", 'school': s_raw}
                 lookup[(s_key, n_key)] = rec
                 for alias, real_name in SCHOOL_ALIASES.items():
-                    if s_raw == real_name:
-                         lookup[(normalize_text(alias), n_key)] = rec
+                    if s_raw == real_name: lookup[(normalize_text(alias), n_key)] = rec
                 if n_key not in name_lookup: name_lookup[n_key] = []
                 name_lookup[n_key].append(rec)
-                
         return lookup, name_lookup
     except: return {}, {}
 
@@ -241,11 +220,11 @@ def detect_school_from_url(bio_text):
 def detect_sport_context(bio):
     if pd.isna(bio): return "Uncertain"
     text = str(bio)
-    analysis_text = text[200:].lower() if len(text) > 500 else text.lower()
-    
-    # NOTE: NO POISON PILL HERE. Only check header for poison.
-    # Just check context weights.
+    intro_text = text[:1000].lower()
+    for poison in POISON_PILLS_RAW:
+        if poison.lower() in intro_text: return None 
 
+    analysis_text = text[200:].lower() if len(text) > 500 else text.lower()
     fb_score = sum(analysis_text.count(w) for w in FOOTBALL_INDICATORS)
     max_other_score = 0
     likely_other_sport = None
@@ -256,21 +235,17 @@ def detect_sport_context(bio):
             max_other_score = score
             likely_other_sport = sport
 
-    # Decision Logic: Bias towards Football if present
     if fb_score > 0: return "Football"
-    
     if max_other_score > 2: return likely_other_sport
-    
-    # If uncertain but header has football, it's football
     return "Football" if "football" in text[:300].lower() else "Uncertain"
 
 def detect_player_by_context(bio, title):
-    text = str(bio).lower()[:800]
-    if "roster" in str(title).lower(): return True
+    text = str(bio).lower()[:1500] 
+    if any(x in str(title).lower() for x in ["roster", "football", "athlete", "player"]): return True
     if any(x in text for x in ["freshman", "sophomore", "junior", "senior", "redshirt", "class of 20"]): return True
     if re.search(r"\d['’]-?\d+\"?\s+\d{2,3}\s?lbs", text): return True
     if re.search(r"\b(qb|wr|rb|te|ol|dl|lb|db|saf|cb|pk|p|ls)\b", text) and ("hometown" in text or "high school" in text): return True
-    if "punt" in text or "kick" in text or "rushing" in text or "tackle" in text:
+    if "punt" in text or "kick" in text or "rushing" in text or "tackle" in text or "yards" in text:
         if "coach" not in str(title).lower(): return True
     return False
 
@@ -287,7 +262,6 @@ def parse_header_smart(bio):
     
     clean_text = str(bio).replace('\r', '\n').replace('–', '-').replace('—', '-')
     lines = [L.strip() for L in clean_text.split('\n') if L.strip()]
-    
     header = None
     for line in lines[:8]:
         if " - " in line and "http" not in line and "SOURCE" not in line:
@@ -320,23 +294,35 @@ def get_snippet(text, keyword):
     if m: s, e = max(0, m.start()-60), min(len(clean), m.end()+60); return f"...{clean[s:e].strip()}..."
     return f"...{clean[:100]}..."
 
-# --- 5. SEARCH LOGIC ---
+# --- 4. SESSION STATE SEARCH (The "Click to Run" Fix) ---
+if 'search_results' not in st.session_state:
+    st.session_state.search_results = None
+if 'search_filename' not in st.session_state:
+    st.session_state.search_filename = None
+
+# --- 5. SEARCH INTERFACE (FORM) ---
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
-    keywords_str = st.text_input("", placeholder="🔍 Search Database (e.g. Tallahassee, Quarterback)...")
-    run_search = st.button("RUN SEARCH", use_container_width=True)
+    with st.form(key='search_form'):
+        keywords_str = st.text_input("", placeholder="🔍 Search Database (e.g. Tallahassee, Quarterback)...")
+        submit_button = st.form_submit_button(label='RUN SEARCH')
 
-if run_search or keywords_str:
-    if not keywords_str: st.warning("⚠️ Please enter a keyword.")
+if submit_button:
+    if not keywords_str:
+        st.warning("⚠️ Please enter a keyword.")
     else:
         keywords = [k.strip() for k in keywords_str.split(',') if k.strip()]
         chunk_files = glob.glob("chunk_*.csv")
-        if not chunk_files: st.error("❌ Critical Error: No database files found.")
+        
+        if not chunk_files:
+            st.error("❌ Critical Error: No database files found.")
         else:
             try: chunk_files.sort(key=lambda x: int(re.search(r'\d+', x).group()))
             except: pass
+            
             results = []
             progress_bar = st.progress(0)
+            
             for i, file in enumerate(chunk_files):
                 progress_bar.progress((i + 1) / len(chunk_files))
                 try:
@@ -351,34 +337,29 @@ if run_search or keywords_str:
                             elif c_clean.lower() == 'school': col_map[c_clean] = 'School'
                             elif c_clean.lower() == 'title': col_map[c_clean] = 'Title'
                         chunk.rename(columns=col_map, inplace=True)
+                        
                         if 'Full_Bio' not in chunk.columns: continue
+                        
                         mask = chunk['Full_Bio'].str.contains('|'.join(keywords), case=False, na=False)
                         if mask.any():
                             found = chunk[mask].copy()
+                            
                             def enrich_row(row):
-                                # 1. Strict Name/Junk Check
                                 meta = parse_header_smart(row['Full_Bio'])
                                 name = row.get('Name', '')
                                 if not name or name == "Unknown" or len(name) < 3: name = meta['Name'] or name
                                 if any(bad.lower() in str(name).lower() for bad in BAD_NAMES): return None
                                 if len(str(name)) > 40: return None
                                 
-                                # 2. Strict HEADER Poison Pill (No Bio Check)
-                                title = row.get('Title', '')
-                                if not title or title == "Unknown": title = meta['Title'] or title
+                                detected_sport = detect_sport_context(row['Full_Bio'])
+                                if detected_sport != "Football" and detected_sport != "Uncertain": return None 
+
                                 school = row.get('School', '')
                                 if not school or school == "Unknown": school = meta['School'] or school
+                                    
+                                title = row.get('Title', '')
+                                if not title or title == "Unknown": title = meta['Title'] or title
                                 
-                                # ONLY CHECK TITLE AND SCHOOL FOR POISON
-                                header_check = (str(title) + " " + str(school)).lower()
-                                for poison in POISON_PILLS_HEADER:
-                                    if poison.lower() in header_check: return None
-
-                                # 3. Sport Siphon (Soft Context Check)
-                                detected_sport = detect_sport_context(row['Full_Bio'])
-                                if detected_sport != "Football" and detected_sport != "Uncertain":
-                                    return None 
-
                                 role = meta['Role']
                                 if role == "COACH/STAFF":
                                     if detect_player_by_context(row['Full_Bio'], title):
@@ -420,31 +401,37 @@ if run_search or keywords_str:
                 except: continue
 
             progress_bar.empty()
+            
             if results:
                 final_df = pd.concat(results)
                 final_df = final_df[~final_df['Name'].str.contains("Skip To|Official|Javascript", case=False, na=False)]
                 final_df.dropna(subset=['Name'], inplace=True)
-                
-                # DEDUPLICATION (Keep First)
                 final_df.drop_duplicates(subset=['Name', 'School'], inplace=True)
-
                 final_df['Role_Sort'] = final_df['Role'].apply(lambda x: 1 if "PLAYER" in str(x).upper() else 0)
                 final_df.sort_values(by=['Role_Sort', 'School', 'Name'], ascending=[True, True, True], inplace=True)
                 cols = ['Role', 'Name', 'Title', 'School', 'Sport', 'Email', 'Twitter', 'Context_Snippet', 'Full_Bio']
                 final_df = final_df[cols]
                 
-                st.success(f"🎉 Found {len(final_df)} matches.")
-                st.dataframe(final_df, use_container_width=True)
-                
+                # SAVE TO SESSION STATE
+                st.session_state.search_results = final_df
                 safe_kw = keywords[0].replace(' ', '_')
                 date_str = datetime.now().strftime("%Y-%m-%d")
-                file_name = f"{safe_kw}_{date_str}.xlsx"
-                buffer = io.BytesIO()
-                with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                    final_df.to_excel(writer, index=False, sheet_name="Results")
-                    workbook = writer.book
-                    worksheet = writer.sheets["Results"]
-                    cell_format = workbook.add_format({'text_wrap': False, 'valign': 'top'})
-                    worksheet.set_column('A:I', 25, cell_format)
-                st.download_button("💾 DOWNLOAD RESULTS (EXCEL)", buffer.getvalue(), file_name, "application/vnd.ms-excel", type="primary")
-            else: st.warning("No matches found.")
+                st.session_state.search_filename = f"{safe_kw}_{date_str}.xlsx"
+            else:
+                st.session_state.search_results = None
+                st.warning("No matches found.")
+
+# --- 6. DISPLAY RESULTS (FROM SESSION STATE) ---
+if st.session_state.search_results is not None:
+    st.success(f"🎉 Found {len(st.session_state.search_results)} matches.")
+    st.dataframe(st.session_state.search_results, use_container_width=True)
+    
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+        st.session_state.search_results.to_excel(writer, index=False, sheet_name="Results")
+        workbook = writer.book
+        worksheet = writer.sheets["Results"]
+        cell_format = workbook.add_format({'text_wrap': False, 'valign': 'top'})
+        worksheet.set_column('A:I', 25, cell_format)
+    
+    st.download_button("💾 DOWNLOAD RESULTS (EXCEL)", buffer.getvalue(), st.session_state.search_filename, "application/vnd.ms-excel", type="primary")
