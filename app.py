@@ -6,6 +6,7 @@ import os
 import re
 from datetime import datetime
 import glob
+import gc  # Garbage Collector for memory management
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Recruiting Search Pro", page_icon="🏈", layout="wide")
@@ -14,7 +15,7 @@ st.set_page_config(page_title="Recruiting Search Pro", page_icon="🏈", layout=
 MASTER_DB_FILE = 'REC_CONS_MASTER.csv' 
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
-# --- CONSTANTS & LISTS ---
+# --- CONSTANTS ---
 FORBIDDEN_SPORTS = [
     "Volleyball", "Baseball", "Softball", "Soccer", "Tennis", "Golf", 
     "Swimming", "Lacrosse", "Hockey", "Wrestling", "Gymnastics", 
@@ -91,8 +92,8 @@ def normalize_text(text):
     return re.sub(r'[^a-z0-9]', '', text).strip()
 
 @st.cache_data
-def load_data():
-    # 1. Load Master DB (The 10k list)
+def load_master_lookup():
+    # Only loads the small 10k list into memory
     try:
         if not os.path.exists(MASTER_DB_FILE):
             try:
@@ -125,56 +126,9 @@ def load_data():
                 lookup[(s_key, n_key)] = record
                 if n_key not in name_lookup: name_lookup[n_key] = []
                 name_lookup[n_key].append(record)
+        return lookup, name_lookup
     except:
-        lookup, name_lookup = {}, {}
-
-    # 2. Load Main Database (from Chunks in ROOT FOLDER)
-    # Search for files named chunk_0.csv, chunk_1.csv etc in the current directory
-    all_files = glob.glob("chunk_*.csv")
-    
-    if not all_files:
-        st.error(f"❌ No 'chunk_*.csv' files found in the repository root. Please ensure they are uploaded next to app.py.")
-        return None, None, None
-
-    df_list = []
-    # Sort files to ensure order (chunk_0, chunk_1, chunk_10...)
-    all_files.sort(key=lambda x: int(re.search(r'\d+', x).group()))
-
-    for filename in all_files:
-        try:
-            df_chunk = pd.read_csv(filename, index_col=None, header=0)
-            df_list.append(df_chunk)
-        except Exception as e:
-            continue
-
-    if not df_list:
-        st.error("❌ Found chunk files, but could not read them.")
-        return None, None, None
-        
-    df = pd.concat(df_list, axis=0, ignore_index=True).fillna("")
-
-    # Standardize Columns
-    df.columns = [c.strip() for c in df.columns]
-    
-    # Check for 'Full_Bio'
-    if 'Full_Bio' not in df.columns:
-        possible = ['Bio', 'bio', 'Full Bio', 'Description', 'About']
-        found = False
-        for c in possible:
-            if c in df.columns: 
-                df.rename(columns={c: 'Full_Bio'}, inplace=True)
-                found = True
-                break
-        if not found and len(df.columns) > 1:
-            # Last ditch: assume the longest column is the bio
-            lengths = df.apply(lambda x: x.astype(str).str.len().mean())
-            longest_col = lengths.idxmax()
-            df.rename(columns={longest_col: 'Full_Bio'}, inplace=True)
-    
-    if 'Name' not in df.columns and 'name' in df.columns: df.rename(columns={'name': 'Name'}, inplace=True)
-    if 'School' not in df.columns and 'school' in df.columns: df.rename(columns={'school': 'School'}, inplace=True)
-
-    return df, lookup, name_lookup
+        return {}, {}
 
 def get_snippet(text, keyword):
     if pd.isna(text) or text == "": return ""
@@ -369,83 +323,111 @@ def clean_row_logic(row):
     row['Name'], row['Title'], row['School'] = name.title(), title, school
     return row
 
-def process_search_streamlit(df, master_lookup, name_lookup, keywords):
-    all_clean = []
+def process_search_streaming(master_lookup, name_lookup, keywords):
+    # This is the Low-Memory Magic: Search files one by one
+    chunk_files = glob.glob("chunk_*.csv")
+    chunk_files.sort(key=lambda x: int(re.search(r'\d+', x).group()))
     
-    for key in keywords:
-        mask = df['Full_Bio'].str.contains(key, case=False, na=False)
-        results = df[mask].copy()
-        if results.empty: continue
+    all_clean = []
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    total_chunks = len(chunk_files)
 
-        results = results.apply(clean_row_logic, axis=1)
-        results = results[results['Name'] != "DELETE_ME"]
-        results['Context_Snippet'] = results['Full_Bio'].apply(lambda x: get_snippet(x, key))
-
-        def enrich(row):
-            s_key, n_key = normalize_text(row['School']), normalize_text(row['Name'])
-            match = master_lookup.get((s_key, n_key))
-            
-            # Secondary Lookup: Correct School Name
-            if not match:
-                potential_matches = name_lookup.get(n_key, [])
-                for cand in potential_matches:
-                    c_school_norm = normalize_text(cand['school'])
-                    # Fuzzy Match
-                    if s_key in c_school_norm or c_school_norm in s_key:
-                        match = cand
-                        row['School'] = cand['school'] 
-                        break
-
-            if match:
-                if not row['Email'] or str(row['Email']).lower() in ['', 'nan', 'n/a']:
-                    row['Email'] = match['email']
-                if not row['Twitter'] or str(row['Twitter']).lower() in ['', 'nan', 'n/a']:
-                    if len(match['twitter']) > 3: row['Twitter'] = match['twitter']
-                if match['title'] and len(match['title']) > 2:
-                    row['Title'] = match['title']
-            
-            # Twitter Bio Hunter (Fallback)
-            if pd.isna(row['Twitter']) or str(row['Twitter']).strip() == "":
-                tw_match = re.search(r"twitter\.com/([a-zA-Z0-9_]+)", row['Full_Bio'], re.IGNORECASE)
-                if tw_match: row['Twitter'] = f"@{tw_match.group(1)}"
-                
-            return row
-
-        results = results.apply(enrich, axis=1)
-        is_wrong = results['Title'].str.contains('|'.join(FORBIDDEN_SPORTS), case=False, na=False)
-        clean_df = results[~is_wrong].copy()
+    for i, filename in enumerate(chunk_files):
+        status_text.text(f"Scanning chunk {i+1} of {total_chunks}...")
+        progress_bar.progress((i + 1) / total_chunks)
         
-        if not clean_df.empty:
-            clean_df['Search_Term'] = key
-            all_clean.append(clean_df)
+        try:
+            df_chunk = pd.read_csv(filename, index_col=None, header=0).fillna("")
+            
+            # Smart Column Detection per chunk
+            df_chunk.columns = [c.strip() for c in df_chunk.columns]
+            if 'Full_Bio' not in df_chunk.columns:
+                 possible = ['Bio', 'bio', 'Full Bio', 'Description', 'About']
+                 for c in possible:
+                     if c in df_chunk.columns: df_chunk.rename(columns={c: 'Full_Bio'}, inplace=True); break
+            
+            if 'Name' not in df_chunk.columns and 'name' in df_chunk.columns: df_chunk.rename(columns={'name': 'Name'}, inplace=True)
+            if 'School' not in df_chunk.columns and 'school' in df_chunk.columns: df_chunk.rename(columns={'school': 'School'}, inplace=True)
+            
+            if 'Full_Bio' not in df_chunk.columns: continue
+
+            # SEARCH
+            for key in keywords:
+                mask = df_chunk['Full_Bio'].str.contains(key, case=False, na=False)
+                results = df_chunk[mask].copy()
+                
+                if not results.empty:
+                    # Clean Matching Rows
+                    results = results.apply(clean_row_logic, axis=1)
+                    results = results[results['Name'] != "DELETE_ME"]
+                    results['Context_Snippet'] = results['Full_Bio'].apply(lambda x: get_snippet(x, key))
+                    
+                    # Enrich with Master Data
+                    def enrich(row):
+                        s_key, n_key = normalize_text(row['School']), normalize_text(row['Name'])
+                        match = master_lookup.get((s_key, n_key))
+                        if not match:
+                            potential_matches = name_lookup.get(n_key, [])
+                            for cand in potential_matches:
+                                c_school_norm = normalize_text(cand['school'])
+                                if s_key in c_school_norm or c_school_norm in s_key:
+                                    match = cand
+                                    row['School'] = cand['school'] 
+                                    break
+                        if match:
+                            if not row['Email'] or str(row['Email']).lower() in ['', 'nan', 'n/a']:
+                                row['Email'] = match['email']
+                            if not row['Twitter'] or str(row['Twitter']).lower() in ['', 'nan', 'n/a']:
+                                if len(match['twitter']) > 3: row['Twitter'] = match['twitter']
+                            if match['title'] and len(match['title']) > 2:
+                                row['Title'] = match['title']
+                        if pd.isna(row['Twitter']) or str(row['Twitter']).strip() == "":
+                            tw_match = re.search(r"twitter\.com/([a-zA-Z0-9_]+)", row['Full_Bio'], re.IGNORECASE)
+                            if tw_match: row['Twitter'] = f"@{tw_match.group(1)}"
+                        return row
+
+                    results = results.apply(enrich, axis=1)
+                    is_wrong = results['Title'].str.contains('|'.join(FORBIDDEN_SPORTS), case=False, na=False)
+                    clean_df = results[~is_wrong].copy()
+                    
+                    if not clean_df.empty:
+                        clean_df['Search_Term'] = key
+                        all_clean.append(clean_df)
+
+            # Free memory immediately
+            del df_chunk
+            gc.collect()
+
+        except Exception as e:
+            continue
+
+    status_text.empty()
+    progress_bar.empty()
 
     if all_clean:
         final_df = pd.concat(all_clean)
-        # Aggressive Dedupe
         final_df.drop_duplicates(subset=['Name', 'School'], keep='first', inplace=True)
-        # Sort
         role_map = {'COACH/STAFF': 1, 'PLAYER': 2, 'UNCERTAIN': 3}
         final_df['Role_Rank'] = final_df['Role'].map(role_map).fillna(3)
         final_df.sort_values(by=['Role_Rank', 'School', 'Name'], inplace=True)
-        
-        # Final Column Filter
-        cols_to_keep = ['Role', 'Name', 'Title', 'School', 'Sport', 'Email', 'Twitter', 'Context_Snippet', 'Full_Bio']
+        cols_to_keep = ['Role', 'Name', 'Title', 'School', 'Email', 'Twitter', 'Context_Snippet', 'Full_Bio']
         return final_df[cols_to_keep]
     return pd.DataFrame()
 
 # --- STREAMLIT APP LAYOUT ---
 
 st.title("🏈 Recruiting Search Pro")
-st.markdown("Search the database of **57,000+ Profiles** for coaches and players.")
+st.markdown("Search the database of **57,000+ Profiles**.")
 
-# Initialize Data
-with st.spinner("Stitching Database..."):
-    df, master_lookup, name_lookup = load_data()
+# Initialize Data (Lightweight)
+master_lookup, name_lookup = load_master_lookup()
+chunk_count = len(glob.glob("chunk_*.csv"))
 
-if df is None:
-    st.error(f"Could not load database. Please make sure the chunk_*.csv files are uploaded to the main GitHub folder.")
+if chunk_count == 0:
+    st.error("❌ No database chunks found. Please upload `chunk_*.csv` files to GitHub.")
 else:
-    st.success(f"✅ Database Ready ({len(df):,} profiles loaded)")
+    st.success(f"✅ Database Ready ({chunk_count} chunks detected).")
 
     # Search Bar
     search_input = st.text_input("Enter Keywords (comma separated):", placeholder="e.g. tallahassee, atlanta, dallas")
@@ -455,8 +437,9 @@ else:
             st.warning("Please enter at least one keyword.")
         else:
             keywords = [k.strip() for k in search_input.split(',') if k.strip()]
+            
             with st.spinner(f"Searching for: {', '.join(keywords)}..."):
-                results_df = process_search_streamlit(df, master_lookup, name_lookup, keywords)
+                results_df = process_search_streaming(master_lookup, name_lookup, keywords)
             
             if not results_df.empty:
                 st.subheader(f"Found {len(results_df)} Matches")
@@ -466,7 +449,6 @@ else:
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                     results_df.to_excel(writer, index=False, sheet_name="Results")
-                    # Format
                     workbook = writer.book
                     worksheet = writer.sheets["Results"]
                     header_fmt = workbook.add_format({'bold': True, 'bg_color': '#D9EAD3', 'border': 1})
