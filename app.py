@@ -50,13 +50,8 @@ st.markdown("""
 # --- 2. CONSTANTS & FILES ---
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
-# FOOTBALL SEARCH TERMS
+# STRICT LISTS
 FOOTBALL_INDICATORS = ["football", "quarterback", "linebacker", "touchdown", "nfl", "bowl", "recruiting", "fbs", "fcs", "interception", "tackle", "gridiron"]
-NON_FOOTBALL_INDICATORS = {
-    "Volleyball": ["volleyball", "set", "spike", "libero"], "Baseball": ["baseball", "inning", "homerun", "pitcher"],
-    "Basketball": ["basketball", "nba", "dunk", "rebound"], "Soccer": ["soccer", "goal", "striker", "fifa"],
-    "Softball": ["softball"], "Track": ["track", "sprint"], "Swimming": ["swim", "dive"], "Lacrosse": ["lacrosse"]
-}
 POISON_PILLS_TEXT = ["Women's Flag", "Flag Football"]
 BAD_NAMES = ["Football Roster", "Football Schedule", "Composite Schedule", "Game Recap", "Menu", "Search", "Tickets"]
 
@@ -75,13 +70,15 @@ SCHOOL_ALIASES = {
 def normalize_text(text):
     if pd.isna(text): return ""
     text = str(text).lower()
+    # Remove junk characters to fix "Sell" vs "Sell "
+    text = text.replace('.', '').replace("'", "").strip()
     for word in ['university', 'univ', 'college', 'the', 'of', 'athletics', 'inst']:
         text = text.replace(word, '')
     return re.sub(r'[^a-z0-9]', '', text).strip()
 
 @st.cache_data(show_spinner=False)
 def load_lookup():
-    """Load coach database safely."""
+    """Load coach database with GLOBAL MATCHING enabled."""
     df = None
     try:
         r = requests.get(GOOGLE_SHEET_CSV_URL, timeout=3)
@@ -99,26 +96,28 @@ def load_lookup():
 
     if df is None or df.empty: return {}, {}, {}, "Failed"
 
-    cols_lower = {c.lower().strip(): c for c in df.columns}
-    def get_col_name(*candidates):
-        for c in candidates:
-            if c.lower() in cols_lower: return cols_lower[c.lower()]
-        for c in candidates:
-            for actual in cols_lower:
-                if c.lower() in actual: return cols_lower[actual]
+    # --- COLUMN HUNTER (Finds columns regardless of messy headers) ---
+    def find_col(keywords):
+        for col in df.columns:
+            c_clean = str(col).lower().strip()
+            for k in keywords:
+                if k in c_clean: return col
         return None
 
-    c_school = get_col_name('school', 'institution')
-    c_first = get_col_name('first name', 'first')
-    c_last = get_col_name('last name', 'last')
-    c_email = get_col_name('email', 'e-mail')
-    c_twitter = get_col_name("individual's twitter", "twitter", "x.com", "social")
-    c_title = get_col_name('title', 'position', 'role')
+    c_school = find_col(['school', 'institution'])
+    c_first = find_col(['first name', 'first'])
+    c_last = find_col(['last name', 'last'])
+    c_email = find_col(['email', 'e-mail', 'mail'])
+    # Strict Twitter Search
+    c_twitter = find_col(["individual's twitter", "twitter", "x.com", "social"]) 
+    c_title = find_col(['title', 'position', 'role'])
 
-    lookup, name_lookup, lastname_lookup = {}, {}, {}
+    lookup, global_name_lookup, lastname_lookup = {}, {}, {}
 
     for _, row in df.iterrows():
         raw_school = str(row[c_school]).strip() if c_school and pd.notna(row[c_school]) else ""
+        
+        # Apply Aliases
         for alias, real in SCHOOL_ALIASES.items():
             if alias.lower() == raw_school.lower(): raw_school = real
         
@@ -137,75 +136,63 @@ def load_lookup():
             n_key = normalize_text(full_name)
             l_key = normalize_text(last)
             
-            # BUILD MATCHING KEYS
+            # 1. Exact School + Name
             if s_key: lookup[(s_key, n_key)] = rec
-            if n_key not in name_lookup: name_lookup[n_key] = []
-            name_lookup[n_key].append(rec)
+            
+            # 2. GLOBAL Name Match (The Fix for Mismatched Schools)
+            # If "Edwin Pata" is unique or first seen, save him globally
+            if n_key not in global_name_lookup: 
+                global_name_lookup[n_key] = rec
+            
+            # 3. Last Name Backup
             if s_key:
                 if (s_key, l_key) not in lastname_lookup: lastname_lookup[(s_key, l_key)] = []
                 lastname_lookup[(s_key, l_key)].append(rec)
             
-    return lookup, name_lookup, lastname_lookup, "Success"
+    return lookup, global_name_lookup, lastname_lookup, "Success"
 
-# *** KEY CHANGE: Renamed to v2 to FORCE CACHE RELOAD ***
-if "master_data_v2" not in st.session_state:
-    st.session_state["master_data_v2"] = load_lookup()
-master_lookup, name_lookup, lastname_lookup, db_status = st.session_state["master_data_v2"]
+# *** V3: Force Cache Clear ***
+if "master_data_v3" not in st.session_state:
+    st.session_state["master_data_v3"] = load_lookup()
+master_lookup, global_name_lookup, lastname_lookup, db_status = st.session_state["master_data_v3"]
 
 def detect_sport(bio):
     text = str(bio).lower()
     if any(p.lower() in text[:1000] for p in POISON_PILLS_TEXT): return None
     fb_score = sum(text.count(w) for w in FOOTBALL_INDICATORS)
-    for sport, keywords in NON_FOOTBALL_INDICATORS.items():
-        if sum(text.count(w) for w in keywords) > fb_score + 1: return None
-    return "Football"
+    return "Football" if fb_score > 0 else None
 
 def determine_role(title, bio_text):
     title_lower = str(title).lower()
     
-    # --- AUTHORITY RULE 1: STAFF KEYWORDS ---
-    # If the title says Coach/Director/Manager/Analyst, THEY ARE STAFF.
-    # We do NOT check the bio if this matches. This prevents "Menu Text" from tricking us.
-    strong_staff_keywords = [
+    # 1. AUTHORITY: STAFF
+    strong_staff = [
         "coach", "coordinator", "director", "manager", "analyst", 
         "assistant", "specialist", "trainer", "video", "recruiting", 
-        "personnel", "chief of staff", "scout", "dietitian", "nutrition", 
-        "ga", "grad assistant", "graduate assistant", "intern", "fellow", 
-        "admin", "strength", "conditioning", "performance", "player dev", 
-        "development", "exec", "executive", "sr.", "jr.", "head", "asst", 
-        "tech", "media", "creative", "gm", "operations"
+        "personnel", "chief", "scout", "dietitian", "nutrition", 
+        "ga", "grad assistant", "intern", "fellow", "admin", "strength", 
+        "conditioning", "performance", "player dev", "exec", "head", "gm", "ops"
     ]
-    if any(k in title_lower for k in strong_staff_keywords):
+    if any(k in title_lower for k in strong_staff):
         return "COACH/STAFF"
 
-    # --- AUTHORITY RULE 2: PLAYER POSITIONS ---
-    # If title explicitly names a position, they are PLAYER.
-    strong_player_positions = [
+    # 2. AUTHORITY: PLAYER
+    strong_player = [
         "quarterback", "running back", "wide receiver", "tight end", 
         "offensive line", "defensive line", "linebacker", "defensive back",
-        "cornerback", "safety", "kicker", "punter", "long snapper",
+        "cornerback", "safety", "kicker", "punter", "snapper",
         "qb", "rb", "wr", "te", "ol", "dl", "lb", "db", "cb", "s", "k", "p", "ls",
-        "athlete", "star", "edge", "rush", "tackle", "guard", "center", "nose"
+        "athlete", "edge", "rush", "tackle", "guard", "center"
     ]
-    if any(p in title_lower for p in strong_player_positions):
+    if any(p in title_lower for p in strong_player):
         return "PLAYER"
     
-    # --- FALLBACK: BIO SCAN ---
-    # Only if title is "Unknown" or generic, we check the bio.
-    bio_sample = str(bio_text)[:1000].lower()
-    player_bio_flags = ["class:", "height:", "weight:", "high school:", "hometown:", "lbs"]
-    
-    if any(f in bio_sample for f in player_bio_flags):
+    # 3. FALLBACK: BIO
+    bio_sample = str(bio_text)[:800].lower()
+    if any(f in bio_sample for f in ["class:", "height:", "weight:", "hometown:", "lbs"]):
         return "PLAYER"
         
-    return "PLAYER" # Safe default
-
-def extract_real_title(bio):
-    # Try to find a better title in the body text if the header failed
-    match = re.search(r'(?:Title|Position)[:\s]+([A-Za-z \-\&]+?)(?=\n|Email|Phone|Bio)', str(bio), re.IGNORECASE)
-    if match:
-        return match.group(1).strip()
-    return None
+    return "PLAYER"
 
 def parse_header(bio):
     lines = [L.strip() for L in str(bio).split('\n') if L.strip()][:15]
@@ -223,18 +210,12 @@ def parse_header(bio):
             extracted['Last'] = parts[0].strip().split(' ')[-1]
             extracted['School'] = parts[-1].strip()
             if len(parts) > 2: extracted['Title'] = parts[1].strip()
-    
-    # Fix for schools like Nebraska where Title is missing/generic
-    if "University" in extracted['Title'] or "Athletics" in extracted['Title'] or extracted['Title'] == "Unknown":
-        better_title = extract_real_title(bio)
-        if better_title:
-            extracted['Title'] = better_title
-
+            
+    # Normalize School
     for alias, real in SCHOOL_ALIASES.items():
         if alias.lower() in extracted['School'].lower(): extracted['School'] = real
         
     extracted['Role'] = determine_role(extracted['Title'], bio)
-    
     return extracted
 
 def get_snippet(text, keyword):
@@ -299,9 +280,9 @@ if submit_button and keywords_str:
                         # 1. Exact School Match
                         if (s_key, n_key) in master_lookup:
                             match = master_lookup[(s_key, n_key)]
-                        # 2. GLOBAL Name Match (Fixes "FSU" vs "Florida State" mismatch)
-                        elif n_key in name_lookup:
-                            match = name_lookup[n_key][0]
+                        # 2. GLOBAL MATCH (Ignore School)
+                        elif n_key in global_name_lookup:
+                            match = global_name_lookup[n_key]
                         # 3. Last Name Fallback
                         elif (s_key, l_key) in lastname_lookup:
                             match = lastname_lookup[(s_key, l_key)][0]
@@ -326,7 +307,6 @@ if submit_button and keywords_str:
 
         if results_found:
             df_res = pd.DataFrame(results_found).drop_duplicates(subset=['Name', 'School'])
-            # CLEAN TEXT FOR EXCEL
             df_res['Full_Bio'] = df_res['Full_Bio'].astype(str).str.replace(r'[\r\n]+', ' ', regex=True)
             df_res['Context'] = df_res['Context'].astype(str).str.replace(r'[\r\n]+', ' ', regex=True)
             df_res.sort_values(by=['Role', 'Name'], ascending=[True, True], inplace=True)
