@@ -70,7 +70,6 @@ SCHOOL_ALIASES = {
 def normalize_text(text):
     if pd.isna(text): return ""
     text = str(text).lower()
-    # Remove junk characters to fix "Sell" vs "Sell "
     text = text.replace('.', '').replace("'", "").strip()
     for word in ['university', 'univ', 'college', 'the', 'of', 'athletics', 'inst']:
         text = text.replace(word, '')
@@ -78,7 +77,7 @@ def normalize_text(text):
 
 @st.cache_data(show_spinner=False)
 def load_lookup():
-    """Load coach database with GLOBAL MATCHING enabled."""
+    """Load coach database with FORCE SPLIT COLUMN MERGE."""
     df = None
     try:
         r = requests.get(GOOGLE_SHEET_CSV_URL, timeout=3)
@@ -96,7 +95,7 @@ def load_lookup():
 
     if df is None or df.empty: return {}, {}, {}, "Failed"
 
-    # --- COLUMN HUNTER (Finds columns regardless of messy headers) ---
+    # --- INTELLIGENT COLUMN FINDER ---
     def find_col(keywords):
         for col in df.columns:
             c_clean = str(col).lower().strip()
@@ -105,10 +104,11 @@ def load_lookup():
         return None
 
     c_school = find_col(['school', 'institution'])
+    # Explicitly looking for "First" and "Last" separate columns
     c_first = find_col(['first name', 'first'])
     c_last = find_col(['last name', 'last'])
+    
     c_email = find_col(['email', 'e-mail', 'mail'])
-    # Strict Twitter Search
     c_twitter = find_col(["individual's twitter", "twitter", "x.com", "social"]) 
     c_title = find_col(['title', 'position', 'role'])
 
@@ -121,11 +121,19 @@ def load_lookup():
         for alias, real in SCHOOL_ALIASES.items():
             if alias.lower() == raw_school.lower(): raw_school = real
         
+        # --- THE FIX: HANDLE SPLIT OR SINGLE COLUMNS ---
         first = str(row[c_first]).strip() if c_first and pd.notna(row[c_first]) else ""
         last = str(row[c_last]).strip() if c_last and pd.notna(row[c_last]) else ""
         
-        if first or last:
+        full_name = ""
+        if first and last:
             full_name = f"{first} {last}".strip()
+        elif first:
+            full_name = first
+        elif last:
+            full_name = last
+            
+        if full_name:
             email = str(row[c_email]).strip() if c_email and pd.notna(row[c_email]) else ""
             twitter = str(row[c_twitter]).strip() if c_twitter and pd.notna(row[c_twitter]) else ""
             title = str(row[c_title]).strip() if c_title and pd.notna(row[c_title]) else ""
@@ -136,25 +144,25 @@ def load_lookup():
             n_key = normalize_text(full_name)
             l_key = normalize_text(last)
             
-            # 1. Exact School + Name
+            # 1. School + Full Name
             if s_key: lookup[(s_key, n_key)] = rec
             
-            # 2. GLOBAL Name Match (The Fix for Mismatched Schools)
-            # If "Edwin Pata" is unique or first seen, save him globally
+            # 2. Global Full Name (Ignores School Mismatch)
             if n_key not in global_name_lookup: 
                 global_name_lookup[n_key] = rec
             
-            # 3. Last Name Backup
-            if s_key:
+            # 3. Global Last Name (Fuzzy Backup)
+            # Only if last name is unique-ish (len > 3) to avoid bad matches like "Lee"
+            if len(l_key) > 3:
                 if (s_key, l_key) not in lastname_lookup: lastname_lookup[(s_key, l_key)] = []
                 lastname_lookup[(s_key, l_key)].append(rec)
             
     return lookup, global_name_lookup, lastname_lookup, "Success"
 
-# *** V3: Force Cache Clear ***
-if "master_data_v3" not in st.session_state:
-    st.session_state["master_data_v3"] = load_lookup()
-master_lookup, global_name_lookup, lastname_lookup, db_status = st.session_state["master_data_v3"]
+# *** V4: Force Cache Clear Again ***
+if "master_data_v4" not in st.session_state:
+    st.session_state["master_data_v4"] = load_lookup()
+master_lookup, global_name_lookup, lastname_lookup, db_status = st.session_state["master_data_v4"]
 
 def detect_sport(bio):
     text = str(bio).lower()
@@ -165,9 +173,13 @@ def detect_sport(bio):
 def determine_role(title, bio_text):
     title_lower = str(title).lower()
     
-    # 1. AUTHORITY: STAFF
+    # 1. OVERRIDE: IF "COACH" IS IN TITLE, IT IS A COACH. PERIOD.
+    if "coach" in title_lower:
+        return "COACH/STAFF"
+
+    # 2. AUTHORITY: STAFF
     strong_staff = [
-        "coach", "coordinator", "director", "manager", "analyst", 
+        "coordinator", "director", "manager", "analyst", 
         "assistant", "specialist", "trainer", "video", "recruiting", 
         "personnel", "chief", "scout", "dietitian", "nutrition", 
         "ga", "grad assistant", "intern", "fellow", "admin", "strength", 
@@ -176,7 +188,7 @@ def determine_role(title, bio_text):
     if any(k in title_lower for k in strong_staff):
         return "COACH/STAFF"
 
-    # 2. AUTHORITY: PLAYER
+    # 3. AUTHORITY: PLAYER
     strong_player = [
         "quarterback", "running back", "wide receiver", "tight end", 
         "offensive line", "defensive line", "linebacker", "defensive back",
@@ -187,7 +199,7 @@ def determine_role(title, bio_text):
     if any(p in title_lower for p in strong_player):
         return "PLAYER"
     
-    # 3. FALLBACK: BIO
+    # 4. FALLBACK: BIO
     bio_sample = str(bio_text)[:800].lower()
     if any(f in bio_sample for f in ["class:", "height:", "weight:", "hometown:", "lbs"]):
         return "PLAYER"
@@ -210,7 +222,12 @@ def parse_header(bio):
             extracted['Last'] = parts[0].strip().split(' ')[-1]
             extracted['School'] = parts[-1].strip()
             if len(parts) > 2: extracted['Title'] = parts[1].strip()
-            
+    
+    # Try to find better title if current is weak
+    if "University" in extracted['Title'] or "Athletics" in extracted['Title'] or extracted['Title'] == "Unknown":
+        match = re.search(r'(?:Title|Position)[:\s]+([A-Za-z \-\&]+?)(?=\n|Email|Phone|Bio)', str(bio), re.IGNORECASE)
+        if match: extracted['Title'] = match.group(1).strip()
+
     # Normalize School
     for alias, real in SCHOOL_ALIASES.items():
         if alias.lower() in extracted['School'].lower(): extracted['School'] = real
@@ -277,13 +294,13 @@ if submit_button and keywords_str:
                         l_key = normalize_text(meta['Last'])
                         
                         match = {}
-                        # 1. Exact School Match
+                        # 1. Exact School + Full Name
                         if (s_key, n_key) in master_lookup:
                             match = master_lookup[(s_key, n_key)]
-                        # 2. GLOBAL MATCH (Ignore School)
+                        # 2. GLOBAL Name Match (Fixes School Mismatch)
                         elif n_key in global_name_lookup:
                             match = global_name_lookup[n_key]
-                        # 3. Last Name Fallback
+                        # 3. Last Name Fallback (School must match)
                         elif (s_key, l_key) in lastname_lookup:
                             match = lastname_lookup[(s_key, l_key)][0]
 
