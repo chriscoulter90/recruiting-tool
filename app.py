@@ -50,22 +50,6 @@ st.markdown("""
 # --- 2. CONSTANTS & FILES ---
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
-# KEYWORDS FOR SCORING SYSTEM
-COACH_KEYWORDS = [
-    "coach", "director", "coordinator", "assistant", "analyst", "specialist", 
-    "manager", "recruiting", "personnel", "scout", "operations", "quality control",
-    "graduate assistant", "video", "trainer", "dietitian", "nutrition", "chief of staff",
-    "head coach", "associate", "hired", "joined the staff", "coaching career"
-]
-
-PLAYER_KEYWORDS = [
-    "redshirt", "freshman", "sophomore", "junior", "senior", "class:", 
-    "height:", "weight:", "lbs", "high school:", "prev school:", "transfer from",
-    "signed with", "committed to", "wide receiver", "linebacker", "quarterback",
-    "defensive back", "running back", "tight end", "offensive line", "defensive line",
-    "db", "wr", "qb", "rb", "te", "ol", "dl", "lb", "ls", "punter", "kicker"
-]
-
 FOOTBALL_INDICATORS = ["football", "quarterback", "linebacker", "touchdown", "nfl", "bowl", "recruiting", "fbs", "fcs", "interception", "tackle", "gridiron"]
 NON_FOOTBALL_INDICATORS = {
     "Volleyball": ["volleyball", "set", "spike", "libero"], "Baseball": ["baseball", "inning", "homerun", "pitcher"],
@@ -173,47 +157,58 @@ def detect_sport(bio):
         if sum(text.count(w) for w in keywords) > fb_score + 1: return None
     return "Football"
 
-def determine_role_by_score(title, bio_text):
-    text = (str(title) + " " + str(bio_text)[:600]).lower()
+def determine_role(title, bio_text):
+    title_lower = str(title).lower()
     
-    # Points System
-    coach_score = 0
-    player_score = 0
+    # 1. AUTHORITY CHECK: STAFF KEYWORDS
+    # If the Title contains ANY of these, it is AUTOMATICALLY a Coach.
+    # No looking at the bio. No points system.
+    strong_staff_keywords = [
+        "coach", "coordinator", "director", "manager", "analyst", 
+        "assistant", "specialist", "trainer", "video", "recruiting", 
+        "personnel", "chief of staff", "scout", "dietitian", "nutrition", 
+        "ga", "grad assistant", "graduate assistant", "intern", "fellow", 
+        "admin", "strength", "conditioning", "performance", "player dev", 
+        "development", "exec", "executive", "sr.", "jr.", "head", "asst", 
+        "tech", "media", "creative", "gm", "operations"
+    ]
     
-    # Check Coach Keywords
-    for k in COACH_KEYWORDS:
-        if k in text:
-            # Boost score for strong titles found in the Title field specifically
-            if k in str(title).lower():
-                coach_score += 3
-            else:
-                coach_score += 1
-                
-    # Check Player Keywords
-    for k in PLAYER_KEYWORDS:
-        # Strict check for class/height/weight indicators
-        if k in ["class:", "height:", "weight:", "high school:", "prev school:"] and k in text:
-            player_score += 5 # Almost certainly a player
-        elif k in text:
-            player_score += 1
-
-    # Tie-breaker: If Title is just a position (e.g., "Wide Receiver"), it's a player
-    if str(title).lower() in ["wide receiver", "quarterback", "running back", "defensive back", "linebacker", "offensive line", "defensive line", "tight end", "punter", "kicker", "long snapper"]:
-        player_score += 5
-
-    if coach_score > player_score:
+    if any(k in title_lower for k in strong_staff_keywords):
         return "COACH/STAFF"
-    else:
+
+    # 2. AUTHORITY CHECK: PLAYER POSITIONS
+    # If it wasn't a coach, and it contains these, it is AUTOMATICALLY a Player.
+    strong_player_positions = [
+        "quarterback", "running back", "wide receiver", "tight end", 
+        "offensive line", "defensive line", "linebacker", "defensive back",
+        "cornerback", "safety", "kicker", "punter", "long snapper",
+        "qb", "rb", "wr", "te", "ol", "dl", "lb", "db", "cb", "s", "k", "p", "ls",
+        "athlete", "star", "edge", "rush", "tackle", "guard", "center", "nose"
+    ]
+    
+    if any(p in title_lower for p in strong_player_positions):
         return "PLAYER"
+    
+    # 3. FALLBACK: ONLY IF TITLE IS UNKNOWN
+    # If the title didn't match anything above (e.g. "Member", "Roster", "Unknown")
+    # Then we check the bio text for player indicators.
+    bio_sample = str(bio_text)[:1000].lower()
+    player_bio_flags = ["class:", "height:", "weight:", "high school:", "hometown:", "lbs"]
+    
+    if any(f in bio_sample for f in player_bio_flags):
+        return "PLAYER"
+        
+    return "PLAYER" # Default to Player if we really can't tell
 
 def extract_real_title(bio):
+    # Try to find a better title in the body text if the header failed
     match = re.search(r'(?:Title|Position)[:\s]+([A-Za-z \-\&]+?)(?=\n|Email|Phone|Bio)', str(bio), re.IGNORECASE)
     if match:
         return match.group(1).strip()
     return None
 
 def parse_header(bio):
-    lines = [L.strip() for L in str(bio).split('\n') if L.strip()][:10]
+    lines = [L.strip() for L in str(bio).split('\n') if L.strip()][:15]
     header = None
     for delimiter in [" - ", " | ", " : "]:
         header = next((L for L in lines if delimiter in L and "http" not in L), None)
@@ -229,6 +224,7 @@ def parse_header(bio):
             extracted['School'] = parts[-1].strip()
             if len(parts) > 2: extracted['Title'] = parts[1].strip()
     
+    # If title looks generic, look harder
     if "University" in extracted['Title'] or "Athletics" in extracted['Title'] or extracted['Title'] == "Unknown":
         better_title = extract_real_title(bio)
         if better_title:
@@ -237,8 +233,8 @@ def parse_header(bio):
     for alias, real in SCHOOL_ALIASES.items():
         if alias.lower() in extracted['School'].lower(): extracted['School'] = real
         
-    # Use Scoring System
-    extracted['Role'] = determine_role_by_score(extracted['Title'], bio)
+    # Use STRICT Authority System
+    extracted['Role'] = determine_role(extracted['Title'], bio)
     
     return extracted
 
@@ -328,8 +324,11 @@ if submit_button and keywords_str:
 
         if results_found:
             df_res = pd.DataFrame(results_found).drop_duplicates(subset=['Name', 'School'])
+            
+            # Clean text for Excel
             df_res['Full_Bio'] = df_res['Full_Bio'].astype(str).str.replace(r'[\r\n]+', ' ', regex=True)
             df_res['Context'] = df_res['Context'].astype(str).str.replace(r'[\r\n]+', ' ', regex=True)
+            
             df_res.sort_values(by=['Role', 'Name'], ascending=[True, True], inplace=True)
             st.session_state['search_results'] = df_res
         else:
