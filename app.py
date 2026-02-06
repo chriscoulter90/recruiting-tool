@@ -9,7 +9,7 @@ import pandas as pd
 from datetime import datetime
 
 # --- 1. CONFIGURATION & STYLES ---
-st.set_page_config(page_title="Coulter Recruiting v1.6", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="Coulter Recruiting v1.7", page_icon="🏈", layout="wide")
 
 st.markdown("""
     <style>
@@ -47,7 +47,7 @@ st.markdown("""
 
 st.markdown("""
     <div class="header-container">
-        <div class="version-tag">v1.6</div>
+        <div class="version-tag">v1.7</div>
         <div class="main-title">🏈 COULTER RECRUITING</div>
         <div class="sub-title">Football Search Engine</div>
     </div>
@@ -58,6 +58,13 @@ GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlk
 
 # STRICT LISTS
 FOOTBALL_INDICATORS = ["football", "quarterback", "linebacker", "touchdown", "nfl", "bowl", "recruiting", "fbs", "fcs", "interception", "tackle", "gridiron"]
+NON_FOOTBALL_INDICATORS = {
+    "Volleyball": ["volleyball", "set", "spike", "libero"], "Baseball": ["baseball", "inning", "homerun", "pitcher"],
+    "Basketball": ["basketball", "nba", "dunk", "rebound"], "Soccer": ["soccer", "goal", "striker", "fifa"],
+    "Softball": ["softball"], "Track": ["track", "sprint"], "Swimming": ["swim", "dive"], "Lacrosse": ["lacrosse"],
+    "Equestrian": ["equestrian", "horse", "rider", "hunt seat"], "Rowing": ["rowing", "crew", "coxswain", "regatta"],
+    "Field Hockey": ["field hockey"], "Water Polo": ["water polo"]
+}
 POISON_PILLS_TEXT = ["Women's Flag", "Flag Football"]
 BAD_NAMES = [
     "Football Roster", "Football Schedule", "Composite Schedule", "Game Recap", 
@@ -78,7 +85,7 @@ SCHOOL_ALIASES = {
 }
 
 # --- 3. HELPER FUNCTIONS ---
-def normalize_text_v1_6(text):
+def normalize_text_v1_7(text):
     if pd.isna(text): return ""
     text = str(text).lower()
     text = text.replace('.', '').replace("'", "").strip()
@@ -87,7 +94,7 @@ def normalize_text_v1_6(text):
     return re.sub(r'[^a-z0-9]', '', text).strip()
 
 @st.cache_data(show_spinner=False)
-def load_lookup_v1_6():
+def load_lookup_v1_7():
     """Load coach database with TEAM PHOBIC COLUMN DETECTION."""
     df = None
     try:
@@ -179,9 +186,9 @@ def load_lookup_v1_6():
 
             rec = {'email': email, 'twitter': twitter, 'title': title, 'school': raw_school, 'name': full_name}
             
-            s_key = normalize_text_v1_6(raw_school)
-            n_key = normalize_text_v1_6(full_name)
-            l_key = normalize_text_v1_6(last)
+            s_key = normalize_text_v1_7(raw_school)
+            n_key = normalize_text_v1_7(full_name)
+            l_key = normalize_text_v1_7(last)
             
             if s_key: lookup[(s_key, n_key)] = rec
             if n_key not in global_name_lookup: global_name_lookup[n_key] = rec
@@ -191,18 +198,62 @@ def load_lookup_v1_6():
             
     return lookup, global_name_lookup, lastname_lookup, "Success"
 
-# *** V1.6: Cache Clear ***
-if "master_data_v1_6" not in st.session_state:
-    st.session_state["master_data_v1_6"] = load_lookup_v1_6()
-master_lookup, global_name_lookup, lastname_lookup, db_status = st.session_state["master_data_v1_6"]
+# *** V1.7: Cache Clear ***
+if "master_data_v1_7" not in st.session_state:
+    st.session_state["master_data_v1_7"] = load_lookup_v1_7()
+master_lookup, global_name_lookup, lastname_lookup, db_status = st.session_state["master_data_v1_7"]
 
 def detect_sport(bio):
     text = str(bio).lower()
     if any(p.lower() in text[:1000] for p in POISON_PILLS_TEXT): return None
+    
+    # Check for Non-Football Sports
     fb_score = sum(text.count(w) for w in FOOTBALL_INDICATORS)
-    return "Football" if fb_score > 0 else None
+    for sport, keywords in NON_FOOTBALL_INDICATORS.items():
+        # Strict check for other sports
+        sport_score = sum(text.count(w) for w in keywords)
+        if sport_score > fb_score + 1: return None
+        
+    return "Football"
 
-def determine_role_v1_6(title, bio_text):
+def clean_player_title(title, bio_text):
+    # Detect if Title is just a year (e.g. "Freshman", "2023", "Senior")
+    # But ignore legitimate staff titles like "Graduate Assistant"
+    t_clean = str(title).strip().lower()
+    
+    # Staff whitelist (don't touch these)
+    if "assistant" in t_clean or "coach" in t_clean or "manager" in t_clean:
+        return title
+        
+    year_keywords = ["freshman", "sophomore", "junior", "senior", "graduate", "redshirt", "202", "201"]
+    is_year = any(y in t_clean for y in year_keywords)
+    
+    if is_year:
+        # Scan bio for real position
+        bio_lower = str(bio_text)[:500].lower()
+        
+        # Position Map
+        positions = {
+            "Quarterback": ["quarterback", "qb"],
+            "Running Back": ["running back", "rb"],
+            "Wide Receiver": ["wide receiver", "wr"],
+            "Tight End": ["tight end", "te"],
+            "Offensive Line": ["offensive line", "ol", "guard", "tackle", "center"],
+            "Defensive Line": ["defensive line", "dl", "tackle", "end", "edge"],
+            "Linebacker": ["linebacker", "lb"],
+            "Defensive Back": ["defensive back", "db", "corner", "safety", "cb", "saf"],
+            "Kicker/Punter": ["kicker", "punter", "pk", "ls", "snapper"]
+        }
+        
+        for pos_name, keywords in positions.items():
+            if any(k in bio_lower for k in keywords):
+                return pos_name
+                
+        return "Football" # Default if nothing found
+        
+    return title
+
+def determine_role_v1_7(title, bio_text):
     title_lower = str(title).lower()
     if "coach" in title_lower: return "COACH/STAFF"
 
@@ -216,7 +267,7 @@ def determine_role_v1_6(title, bio_text):
     if any(f in bio_sample for f in ["class:", "height:", "weight:", "hometown:", "lbs"]): return "PLAYER"
     return "PLAYER"
 
-def parse_header_v1_6(bio):
+def parse_header_v1_7(bio):
     lines = [L.strip() for L in str(bio).split('\n') if L.strip()][:15]
     header = None
     for delimiter in [" - ", " | ", " : "]:
@@ -240,7 +291,12 @@ def parse_header_v1_6(bio):
     for alias, real in SCHOOL_ALIASES.items():
         if alias.lower() in extracted['School'].lower(): extracted['School'] = real
         
-    extracted['Role'] = determine_role_v1_6(extracted['Title'], bio)
+    extracted['Role'] = determine_role_v1_7(extracted['Title'], bio)
+    
+    # NEW: Clean Player Title if it's a year
+    if extracted['Role'] == 'PLAYER':
+        extracted['Title'] = clean_player_title(extracted['Title'], bio)
+        
     return extracted
 
 def get_snippet(text, keyword):
@@ -291,16 +347,18 @@ if submit_button and keywords_str:
                     matches = df_chunk[mask].copy()
                     
                     for idx, row in matches.iterrows():
-                        meta = parse_header_v1_6(row['Full_Bio'])
+                        meta = parse_header_v1_7(row['Full_Bio'])
                         name = meta['Name'] or "Unknown"
                         
                         if any(b.lower() in str(name).lower() for b in BAD_NAMES): continue
                         if "football" in str(name).lower() or "athletics" in str(name).lower(): continue
+                        
+                        # --- v1.7: IMPROVED SPORT DETECTION ---
                         if detect_sport(row['Full_Bio']) != "Football": continue
                         
-                        s_key = normalize_text_v1_6(meta['School'])
-                        n_key = normalize_text_v1_6(name)
-                        l_key = normalize_text_v1_6(meta['Last'])
+                        s_key = normalize_text_v1_7(meta['School'])
+                        n_key = normalize_text_v1_7(name)
+                        l_key = normalize_text_v1_7(meta['Last'])
                         
                         match = {}
                         if (s_key, n_key) in master_lookup:
