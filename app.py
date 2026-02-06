@@ -9,7 +9,7 @@ import pandas as pd
 from datetime import datetime
 
 # --- 1. CONFIGURATION & STYLES ---
-st.set_page_config(page_title="Coulter Recruiting", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="Coulter Recruiting v1.1", page_icon="🏈", layout="wide")
 
 st.markdown("""
     <style>
@@ -33,6 +33,11 @@ st.markdown("""
     }
     .main-title { font-size: 3.2rem; font-weight: 700; color: #FFFFFF; margin: 0; letter-spacing: -1.5px; }
     .sub-title { font-size: 1.1rem; font-weight: 500; color: #8E8E93; margin-top: 8px; text-transform: uppercase; letter-spacing: 4px; }
+    .version-tag { 
+        position: absolute; top: 10px; right: 20px; 
+        font-size: 0.8rem; color: #8E8E93; font-weight: bold; 
+        background: #eee; padding: 4px 8px; border-radius: 8px;
+    }
     .instruction-text { text-align: center; color: #555; font-size: 1.1em; margin-bottom: 20px; }
     
     /* TABLE */
@@ -42,6 +47,7 @@ st.markdown("""
 
 st.markdown("""
     <div class="header-container">
+        <div class="version-tag">v1.1</div>
         <div class="main-title">🏈 COULTER RECRUITING</div>
         <div class="sub-title">Football Search Engine</div>
     </div>
@@ -67,7 +73,7 @@ SCHOOL_ALIASES = {
 }
 
 # --- 3. HELPER FUNCTIONS ---
-def normalize_text(text):
+def normalize_text_v1_1(text):
     if pd.isna(text): return ""
     text = str(text).lower()
     text = text.replace('.', '').replace("'", "").strip()
@@ -76,8 +82,8 @@ def normalize_text(text):
     return re.sub(r'[^a-z0-9]', '', text).strip()
 
 @st.cache_data(show_spinner=False)
-def load_lookup():
-    """Load coach database with FORCE SPLIT COLUMN MERGE."""
+def load_lookup_v1_1():
+    """Load coach database with FORCE SPLIT COLUMN MERGE (v1.1)."""
     df = None
     try:
         r = requests.get(GOOGLE_SHEET_CSV_URL, timeout=3)
@@ -140,9 +146,9 @@ def load_lookup():
             
             rec = {'email': email, 'twitter': twitter, 'title': title, 'school': raw_school, 'name': full_name}
             
-            s_key = normalize_text(raw_school)
-            n_key = normalize_text(full_name)
-            l_key = normalize_text(last)
+            s_key = normalize_text_v1_1(raw_school)
+            n_key = normalize_text_v1_1(full_name)
+            l_key = normalize_text_v1_1(last)
             
             # 1. School + Full Name
             if s_key: lookup[(s_key, n_key)] = rec
@@ -159,10 +165,10 @@ def load_lookup():
             
     return lookup, global_name_lookup, lastname_lookup, "Success"
 
-# *** V4: Force Cache Clear Again ***
-if "master_data_v4" not in st.session_state:
-    st.session_state["master_data_v4"] = load_lookup()
-master_lookup, global_name_lookup, lastname_lookup, db_status = st.session_state["master_data_v4"]
+# *** V1.1: New Cache Key ***
+if "master_data_v1_1" not in st.session_state:
+    st.session_state["master_data_v1_1"] = load_lookup_v1_1()
+master_lookup, global_name_lookup, lastname_lookup, db_status = st.session_state["master_data_v1_1"]
 
 def detect_sport(bio):
     text = str(bio).lower()
@@ -170,7 +176,7 @@ def detect_sport(bio):
     fb_score = sum(text.count(w) for w in FOOTBALL_INDICATORS)
     return "Football" if fb_score > 0 else None
 
-def determine_role(title, bio_text):
+def determine_role_v1_1(title, bio_text):
     title_lower = str(title).lower()
     
     # 1. OVERRIDE: IF "COACH" IS IN TITLE, IT IS A COACH. PERIOD.
@@ -206,7 +212,7 @@ def determine_role(title, bio_text):
         
     return "PLAYER"
 
-def parse_header(bio):
+def parse_header_v1_1(bio):
     lines = [L.strip() for L in str(bio).split('\n') if L.strip()][:15]
     header = None
     for delimiter in [" - ", " | ", " : "]:
@@ -232,7 +238,7 @@ def parse_header(bio):
     for alias, real in SCHOOL_ALIASES.items():
         if alias.lower() in extracted['School'].lower(): extracted['School'] = real
         
-    extracted['Role'] = determine_role(extracted['Title'], bio)
+    extracted['Role'] = determine_role_v1_1(extracted['Title'], bio)
     return extracted
 
 def get_snippet(text, keyword):
@@ -283,15 +289,15 @@ if submit_button and keywords_str:
                     matches = df_chunk[mask].copy()
                     
                     for idx, row in matches.iterrows():
-                        meta = parse_header(row['Full_Bio'])
+                        meta = parse_header_v1_1(row['Full_Bio'])
                         name = meta['Name'] or "Unknown"
                         
                         if any(b.lower() in str(name).lower() for b in BAD_NAMES): continue
                         if detect_sport(row['Full_Bio']) != "Football": continue
                         
-                        s_key = normalize_text(meta['School'])
-                        n_key = normalize_text(name)
-                        l_key = normalize_text(meta['Last'])
+                        s_key = normalize_text_v1_1(meta['School'])
+                        n_key = normalize_text_v1_1(name)
+                        l_key = normalize_text_v1_1(meta['Last'])
                         
                         match = {}
                         # 1. Exact School + Full Name
