@@ -9,7 +9,7 @@ import pandas as pd
 from datetime import datetime
 
 # --- 1. CONFIGURATION & STYLES ---
-st.set_page_config(page_title="Coulter Recruiting v1.8", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="Coulter Recruiting v1.9", page_icon="🏈", layout="wide")
 
 st.markdown("""
     <style>
@@ -47,7 +47,7 @@ st.markdown("""
 
 st.markdown("""
     <div class="header-container">
-        <div class="version-tag">v1.8</div>
+        <div class="version-tag">v1.9</div>
         <div class="main-title">🏈 COULTER RECRUITING</div>
         <div class="sub-title">Football Search Engine</div>
     </div>
@@ -85,7 +85,7 @@ SCHOOL_ALIASES = {
 }
 
 # --- 3. HELPER FUNCTIONS ---
-def normalize_text_v1_8(text):
+def normalize_text_v1_9(text):
     if pd.isna(text): return ""
     text = str(text).lower()
     text = text.replace('.', '').replace("'", "").strip()
@@ -94,7 +94,7 @@ def normalize_text_v1_8(text):
     return re.sub(r'[^a-z0-9]', '', text).strip()
 
 @st.cache_data(show_spinner=False)
-def load_lookup_v1_8():
+def load_lookup_v1_9():
     """Load coach database with TEAM PHOBIC COLUMN DETECTION."""
     df = None
     try:
@@ -186,9 +186,9 @@ def load_lookup_v1_8():
 
             rec = {'email': email, 'twitter': twitter, 'title': title, 'school': raw_school, 'name': full_name}
             
-            s_key = normalize_text_v1_8(raw_school)
-            n_key = normalize_text_v1_8(full_name)
-            l_key = normalize_text_v1_8(last)
+            s_key = normalize_text_v1_9(raw_school)
+            n_key = normalize_text_v1_9(full_name)
+            l_key = normalize_text_v1_9(last)
             
             if s_key: lookup[(s_key, n_key)] = rec
             if n_key not in global_name_lookup: global_name_lookup[n_key] = rec
@@ -198,10 +198,10 @@ def load_lookup_v1_8():
             
     return lookup, global_name_lookup, lastname_lookup, "Success"
 
-# *** V1.8: Cache Clear ***
-if "master_data_v1_8" not in st.session_state:
-    st.session_state["master_data_v1_8"] = load_lookup_v1_8()
-master_lookup, global_name_lookup, lastname_lookup, db_status = st.session_state["master_data_v1_8"]
+# *** V1.9: Cache Clear ***
+if "master_data_v1_9" not in st.session_state:
+    st.session_state["master_data_v1_9"] = load_lookup_v1_9()
+master_lookup, global_name_lookup, lastname_lookup, db_status = st.session_state["master_data_v1_9"]
 
 def detect_sport(bio):
     text = str(bio).lower()
@@ -216,7 +216,12 @@ def detect_sport(bio):
         
     return "Football"
 
-def determine_role_v1_8(title, bio_text):
+def clean_player_title(title, bio_text):
+    t_clean = str(title).strip().lower()
+    if "assistant" in t_clean or "coach" in t_clean or "manager" in t_clean: return title
+    return "Football"
+
+def determine_role_v1_9(title, bio_text):
     title_lower = str(title).lower()
     if "coach" in title_lower: return "COACH/STAFF"
 
@@ -230,7 +235,7 @@ def determine_role_v1_8(title, bio_text):
     if any(f in bio_sample for f in ["class:", "height:", "weight:", "hometown:", "lbs"]): return "PLAYER"
     return "PLAYER"
 
-def parse_header_v1_8(bio):
+def parse_header_v1_9(bio):
     lines = [L.strip() for L in str(bio).split('\n') if L.strip()][:15]
     header = None
     for delimiter in [" - ", " | ", " : "]:
@@ -254,7 +259,7 @@ def parse_header_v1_8(bio):
     for alias, real in SCHOOL_ALIASES.items():
         if alias.lower() in extracted['School'].lower(): extracted['School'] = real
         
-    extracted['Role'] = determine_role_v1_8(extracted['Title'], bio)
+    extracted['Role'] = determine_role_v1_9(extracted['Title'], bio)
     
     # --- V1.8: FORCE FOOTBALL TITLE FOR PLAYERS ---
     if extracted['Role'] == 'PLAYER':
@@ -262,13 +267,42 @@ def parse_header_v1_8(bio):
         
     return extracted
 
-def get_snippet(text, keyword):
+def get_smart_snippet(text, keyword):
+    """V1.9: Prioritizes HOMETOWN/NATIVE/PERSONAL context over just the first match."""
     clean_text = str(text).replace(chr(10), ' ').replace(chr(13), ' ')
-    m = re.search(re.escape(keyword), clean_text, re.IGNORECASE)
-    if m: 
-        s, e = max(0, m.start()-50), min(len(clean_text), m.end()+50)
-        return f"...{clean_text[s:e]}..."
-    return clean_text[:100] + "..."
+    
+    # Find ALL occurrences of the keyword
+    matches = list(re.finditer(re.escape(keyword), clean_text, re.IGNORECASE))
+    
+    if not matches:
+        return clean_text[:100] + "..."
+    
+    best_snippet = None
+    max_score = -1
+    
+    # Words that indicate "This is the part about where they are from"
+    priority_words = ["hometown", "native", "high school", "born", "raised", "from", "attended", "product of"]
+    
+    for m in matches:
+        # Extract a window around the keyword
+        start = max(0, m.start() - 60)
+        end = min(len(clean_text), m.end() + 60)
+        snippet = clean_text[start:end]
+        
+        # Score it
+        score = 0
+        snippet_lower = snippet.lower()
+        for p in priority_words:
+            if p in snippet_lower:
+                score += 1
+        
+        # Prefer the snippet with the most context words
+        # Or if tie, prefer the one that isn't the very first one (often a header)
+        if score > max_score:
+            max_score = score
+            best_snippet = f"...{snippet}..."
+            
+    return best_snippet
 
 # --- 4. SEARCH LOGIC ---
 st.markdown('<p class="instruction-text">Type in keywords to search college football webpage bios.<br>Put a comma between keywords for multiple searches (e.g., "Linebacker, Recruiting").</p>', unsafe_allow_html=True)
@@ -310,7 +344,7 @@ if submit_button and keywords_str:
                     matches = df_chunk[mask].copy()
                     
                     for idx, row in matches.iterrows():
-                        meta = parse_header_v1_8(row['Full_Bio'])
+                        meta = parse_header_v1_9(row['Full_Bio'])
                         name = meta['Name'] or "Unknown"
                         
                         if any(b.lower() in str(name).lower() for b in BAD_NAMES): continue
@@ -319,9 +353,9 @@ if submit_button and keywords_str:
                         # --- v1.7: IMPROVED SPORT DETECTION ---
                         if detect_sport(row['Full_Bio']) != "Football": continue
                         
-                        s_key = normalize_text_v1_8(meta['School'])
-                        n_key = normalize_text_v1_8(name)
-                        l_key = normalize_text_v1_8(meta['Last'])
+                        s_key = normalize_text_v1_9(meta['School'])
+                        n_key = normalize_text_v1_9(name)
+                        l_key = normalize_text_v1_9(meta['Last'])
                         
                         match = {}
                         if (s_key, n_key) in master_lookup:
@@ -337,6 +371,9 @@ if submit_button and keywords_str:
                         if has_twitter or has_email:
                             meta['Role'] = 'COACH/STAFF'
 
+                        # --- v1.9: SMART SNIPPET ---
+                        snippet = get_smart_snippet(row['Full_Bio'], keywords[0])
+
                         results_found.append({
                             'Role': meta['Role'],
                             'Name': name,
@@ -344,7 +381,7 @@ if submit_button and keywords_str:
                             'School': match.get('school') or meta['School'],
                             'Email': match.get('email', ''),
                             'Twitter': match.get('twitter', ''),
-                            'Context': get_snippet(row['Full_Bio'], keywords[0]),
+                            'Context': snippet,
                             'Full_Bio': row['Full_Bio']
                         })
                 
