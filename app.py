@@ -263,4 +263,179 @@ def parse_header_v1_14(bio):
     
     # --- V1.8: FORCE FOOTBALL TITLE FOR PLAYERS ---
     if extracted['Role'] == 'PLAYER':
-        extracted['Title'] = "
+        extracted['Title'] = "Football"
+        
+    return extracted
+
+def get_smart_snippet(text, keyword):
+    """V1.12: FORCE SNAP to KEYWORD."""
+    clean_text = str(text).replace(chr(10), ' ').replace(chr(13), ' ')
+    
+    # 1. Look for Matches
+    matches = list(re.finditer(re.escape(keyword), clean_text, re.IGNORECASE))
+    
+    if not matches:
+        return clean_text[:120] + "..."
+    
+    best_snippet = None
+    max_score = -1
+    priority_words = ["hometown", "native", "high school", "born", "raised", "from", "attended", "product of"]
+    
+    for m in matches:
+        start = max(0, m.start() - 60)
+        end = min(len(clean_text), m.end() + 60)
+        snippet = clean_text[start:end]
+        
+        score = 0
+        snippet_lower = snippet.lower()
+        for p in priority_words:
+            if p in snippet_lower:
+                score += 10 # Big boost for hometown context
+        
+        if len(snippet) < 30: score -= 5
+        
+        if score > max_score:
+            max_score = score
+            best_snippet = f"...{snippet}..."
+            
+    return best_snippet
+
+# --- 4. SEARCH LOGIC ---
+st.markdown('<p class="instruction-text">Type in keywords to search college football webpage bios.<br>Put a comma between keywords for multiple searches (e.g., "Tallahassee, San Antonio").</p>', unsafe_allow_html=True)
+
+if db_status == "Failed":
+    st.error("❌ Master Database Not Found. Contact info will be empty.")
+
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    with st.form(key='search_form'):
+        keywords_str = st.text_input("", placeholder="🔍 Enter keywords...")
+        submit_button = st.form_submit_button(label='Search')
+
+if 'search_results' not in st.session_state:
+    st.session_state['search_results'] = {} # Dict for multiple sheets
+if 'last_keywords' not in st.session_state:
+    st.session_state['last_keywords'] = ""
+
+if submit_button and keywords_str:
+    # SPLIT KEYWORDS for Tabs
+    keywords_list = [k.strip() for k in keywords_str.split(',') if k.strip()]
+    st.session_state['last_keywords'] = keywords_str
+    
+    chunk_files = glob.glob("chunk_*.csv")
+    chunk_files.sort()
+    
+    all_results = {} # Store DF for each keyword
+    
+    if not chunk_files:
+        st.error("❌ No database files found on server.")
+    else:
+        progress_bar = st.progress(0)
+        
+        # Run search for EACH keyword separately
+        for k_idx, kw in enumerate(keywords_list):
+            results_found = []
+            pattern = re.escape(kw) # Search JUST this keyword
+            
+            for i, file in enumerate(chunk_files):
+                try:
+                    df_chunk = pd.read_csv(file, usecols=['Full_Bio'], dtype=str, on_bad_lines='skip').fillna("")
+                    mask = df_chunk['Full_Bio'].str.contains(pattern, case=False, na=False, regex=True)
+                    
+                    if mask.any():
+                        matches = df_chunk[mask].copy()
+                        for idx, row in matches.iterrows():
+                            meta = parse_header_v1_14(row['Full_Bio'])
+                            name = meta['Name'] or "Unknown"
+                            
+                            if any(b.lower() in str(name).lower() for b in BAD_NAMES): continue
+                            if "football" in str(name).lower() or "athletics" in str(name).lower(): continue
+                            if detect_sport(row['Full_Bio']) != "Football": continue
+                            
+                            s_key = normalize_text_v1_14(meta['School'])
+                            n_key = normalize_text_v1_14(name)
+                            l_key = normalize_text_v1_14(meta['Last'])
+                            
+                            match = {}
+                            match_source = None
+                            
+                            # --- v1.13 MATCHING LOGIC ---
+                            if (s_key, n_key) in master_lookup:
+                                match = master_lookup[(s_key, n_key)]
+                                match_source = 'exact'
+                            elif n_key in global_name_lookup:
+                                match = global_name_lookup[n_key]
+                                match_source = 'global'
+                            elif (s_key, l_key) in lastname_lookup:
+                                match = lastname_lookup[(s_key, l_key)][0]
+                                match_source = 'fuzzy'
+
+                            # --- PLAYER PROTECTION PROTOCOL ---
+                            if match and match_source != 'exact':
+                                if meta['Role'] == 'PLAYER':
+                                    match = {} # Discard dangerous match
+                            
+                            # Apply Coach Data
+                            has_twitter = match.get('twitter') and len(str(match['twitter'])) > 3
+                            has_email = match.get('email') and len(str(match['email'])) > 3
+                            if has_twitter or has_email:
+                                meta['Role'] = 'COACH/STAFF'
+
+                            snippet = get_smart_snippet(row['Full_Bio'], kw)
+
+                            results_found.append({
+                                'Role': meta['Role'],
+                                'Name': name,
+                                'Title': match.get('title') or meta['Title'],
+                                'School': match.get('school') or meta['School'],
+                                'Email': match.get('email', ''),
+                                'Twitter': match.get('twitter', ''),
+                                'Context': snippet,
+                                'Full_Bio': row['Full_Bio']
+                            })
+                    del df_chunk
+                    gc.collect()
+                except Exception: continue
+                # Shared progress bar
+                progress_bar.progress((i + 1 + (k_idx * len(chunk_files))) / (len(chunk_files) * len(keywords_list)))
+
+            if results_found:
+                df_res = pd.DataFrame(results_found).drop_duplicates(subset=['Name', 'School'])
+                df_res['Full_Bio'] = df_res['Full_Bio'].astype(str).str.replace(r'[\r\n]+', ' ', regex=True)
+                df_res['Context'] = df_res['Context'].astype(str).str.replace(r'[\r\n]+', ' ', regex=True)
+                df_res.sort_values(by=['Role', 'School', 'Name'], ascending=[True, True, True], inplace=True)
+                all_results[kw] = df_res
+            
+        progress_bar.empty()
+        st.session_state['search_results'] = all_results
+
+if st.session_state['search_results']:
+    results = st.session_state['search_results']
+    # --- V1.14 TOTAL COUNT FIX ---
+    total_count = sum(len(df) for df in results.values())
+    st.success(f"🎉 Found {total_count} matches across {len(results)} keywords: {', '.join(results.keys())}")
+    
+    # Display Tabs
+    tabs = st.tabs(list(results.keys()))
+    for i, kw in enumerate(results.keys()):
+        with tabs[i]:
+            st.dataframe(results[kw], column_config={"Full_Bio": None}, use_container_width=True, hide_index=True)
+
+    # Clean Filename
+    safe_kw = re.sub(r'[^a-zA-Z0-9]', '_', st.session_state['last_keywords'][:30])
+    file_name_dynamic = f"{safe_kw}_{datetime.now().date()}.xlsx"
+    
+    # Multi-Sheet Excel Writer
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+        for kw, df in results.items():
+            sheet_name = re.sub(r'[^a-zA-Z0-9 ]', '', kw)[:30]
+            df.to_excel(writer, index=False, sheet_name=sheet_name)
+            
+            worksheet = writer.sheets[sheet_name]
+            worksheet.set_column(0, 0, 15)
+            worksheet.set_column(1, 5, 25)
+            worksheet.set_column(6, 6, 50)
+            worksheet.set_column(7, 7, 50)
+    
+    st.download_button("💾 DOWNLOAD EXCEL", buffer.getvalue(), file_name_dynamic, "application/vnd.ms-excel")
