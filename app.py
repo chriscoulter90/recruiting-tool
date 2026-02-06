@@ -9,7 +9,7 @@ import pandas as pd
 from datetime import datetime
 
 # --- 1. CONFIGURATION & STYLES ---
-st.set_page_config(page_title="Coulter Recruiting v1.3", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="Coulter Recruiting v1.4", page_icon="🏈", layout="wide")
 
 st.markdown("""
     <style>
@@ -47,7 +47,7 @@ st.markdown("""
 
 st.markdown("""
     <div class="header-container">
-        <div class="version-tag">v1.3</div>
+        <div class="version-tag">v1.4</div>
         <div class="main-title">🏈 COULTER RECRUITING</div>
         <div class="sub-title">Football Search Engine</div>
     </div>
@@ -59,7 +59,14 @@ GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlk
 # STRICT LISTS
 FOOTBALL_INDICATORS = ["football", "quarterback", "linebacker", "touchdown", "nfl", "bowl", "recruiting", "fbs", "fcs", "interception", "tackle", "gridiron"]
 POISON_PILLS_TEXT = ["Women's Flag", "Flag Football"]
-BAD_NAMES = ["Football Roster", "Football Schedule", "Composite Schedule", "Game Recap", "Menu", "Search", "Tickets"]
+
+# UPDATED BLACKLIST (Includes Clemson Garbage)
+BAD_NAMES = [
+    "Football Roster", "Football Schedule", "Composite Schedule", "Game Recap", 
+    "Menu", "Search", "Tickets", "Clemson Tiger Football", "University Athletics",
+    "National Champions", "Athletics Website", "Skip To Main Content", 
+    "Pause All Rotators", "Scoreboard", "Main Baseball", "Main Basketball"
+]
 
 SCHOOL_ALIASES = {
     "ASU": "Arizona State", "UCF": "Central Florida", "Ole Miss": "Mississippi", 
@@ -73,7 +80,7 @@ SCHOOL_ALIASES = {
 }
 
 # --- 3. HELPER FUNCTIONS ---
-def normalize_text_v1_3(text):
+def normalize_text_v1_4(text):
     if pd.isna(text): return ""
     text = str(text).lower()
     text = text.replace('.', '').replace("'", "").strip()
@@ -82,7 +89,7 @@ def normalize_text_v1_3(text):
     return re.sub(r'[^a-z0-9]', '', text).strip()
 
 @st.cache_data(show_spinner=False)
-def load_lookup_v1_3():
+def load_lookup_v1_4():
     """Load coach database with TEAM PHOBIC COLUMN DETECTION."""
     df = None
     try:
@@ -101,11 +108,9 @@ def load_lookup_v1_3():
 
     if df is None or df.empty: return {}, {}, {}, "Failed"
 
-    # --- SMART COLUMN FINDER (v1.3 with Penalties) ---
+    # --- SMART COLUMN FINDER ---
     def get_smart_col(keywords, data_type='text', bad_words=None):
         if bad_words is None: bad_words = []
-        
-        # 1. Find Candidates
         candidates = []
         for col in df.columns:
             c_lower = str(col).lower().strip()
@@ -114,43 +119,26 @@ def load_lookup_v1_3():
         
         if not candidates: return None
         
-        # 2. Score Candidates
         best_col = None
         max_score = -9999
         
         for col in candidates:
             score = 0
             col_lower = str(col).lower()
-            
-            # PENALTY: Checklist words
-            if any(bad in col_lower for bad in ['sent', 'verify', 'check', 'status', 'date', 'time']):
-                score -= 100
-            
-            # PENALTY: Explicitly Bad Words (e.g. "Team")
-            if any(bad in col_lower for bad in bad_words):
-                score -= 100
-                
-            # BONUS: "Individual" or "Coach" specific keywords
-            if "individual" in col_lower or "personal" in col_lower or "coach" in col_lower:
-                score += 50
-            
-            # BONUS: Exact keyword match
+            if any(bad in col_lower for bad in ['sent', 'verify', 'check', 'status', 'date', 'time']): score -= 100
+            if any(bad in col_lower for bad in bad_words): score -= 100
+            if "individual" in col_lower or "personal" in col_lower or "coach" in col_lower: score += 50
             if col_lower in keywords: score += 10
             
-            # CONTENT AUDIT
             sample = df[col].dropna().astype(str).head(100).tolist()
-            if not sample:
-                score -= 10
+            if not sample: score -= 10
             else:
                 valid_count = 0
                 for val in sample:
                     v = val.strip().lower()
-                    if v in ['x', 'y', 'n', 'yes', 'no', 'true', 'false', 'done']:
-                        valid_count -= 1 
-                    elif data_type == 'email' and '@' in v:
-                        valid_count += 2
-                    elif data_type == 'twitter' and len(v) > 2:
-                        valid_count += 1
+                    if v in ['x', 'y', 'n', 'yes', 'no', 'true', 'false', 'done']: valid_count -= 1 
+                    elif data_type == 'email' and '@' in v: valid_count += 2
+                    elif data_type == 'twitter' and len(v) > 2: valid_count += 1
                 score += valid_count
             
             if score > max_score:
@@ -163,36 +151,23 @@ def load_lookup_v1_3():
     c_first = get_smart_col(['first name', 'first'])
     c_last = get_smart_col(['last name', 'last'])
     c_email = get_smart_col(['email', 'e-mail', 'mail'], 'email')
-    
-    # *** TWITTER FIX: Penalize "Team" ***
-    c_twitter = get_smart_col(
-        ["individual's twitter", "twitter", "x.com", "social"], 
-        'twitter',
-        bad_words=['team', 'general', 'program', 'athletics']
-    )
-    
+    c_twitter = get_smart_col(["individual's twitter", "twitter", "x.com", "social"], 'twitter', bad_words=['team', 'general', 'program', 'athletics'])
     c_title = get_smart_col(['title', 'position', 'role'])
 
     lookup, global_name_lookup, lastname_lookup = {}, {}, {}
 
     for _, row in df.iterrows():
         raw_school = str(row[c_school]).strip() if c_school and pd.notna(row[c_school]) else ""
-        
-        # Apply Aliases
         for alias, real in SCHOOL_ALIASES.items():
             if alias.lower() == raw_school.lower(): raw_school = real
         
-        # --- HANDLE SPLIT OR SINGLE COLUMNS ---
         first = str(row[c_first]).strip() if c_first and pd.notna(row[c_first]) else ""
         last = str(row[c_last]).strip() if c_last and pd.notna(row[c_last]) else ""
         
         full_name = ""
-        if first and last:
-            full_name = f"{first} {last}".strip()
-        elif first:
-            full_name = first
-        elif last:
-            full_name = last
+        if first and last: full_name = f"{first} {last}".strip()
+        elif first: full_name = first
+        elif last: full_name = last
             
         if full_name:
             email = str(row[c_email]).strip() if c_email and pd.notna(row[c_email]) else ""
@@ -204,9 +179,9 @@ def load_lookup_v1_3():
 
             rec = {'email': email, 'twitter': twitter, 'title': title, 'school': raw_school, 'name': full_name}
             
-            s_key = normalize_text_v1_3(raw_school)
-            n_key = normalize_text_v1_3(full_name)
-            l_key = normalize_text_v1_3(last)
+            s_key = normalize_text_v1_4(raw_school)
+            n_key = normalize_text_v1_4(full_name)
+            l_key = normalize_text_v1_4(last)
             
             if s_key: lookup[(s_key, n_key)] = rec
             if n_key not in global_name_lookup: global_name_lookup[n_key] = rec
@@ -216,10 +191,10 @@ def load_lookup_v1_3():
             
     return lookup, global_name_lookup, lastname_lookup, "Success"
 
-# *** V1.3: New Cache Key ***
-if "master_data_v1_3" not in st.session_state:
-    st.session_state["master_data_v1_3"] = load_lookup_v1_3()
-master_lookup, global_name_lookup, lastname_lookup, db_status = st.session_state["master_data_v1_3"]
+# *** V1.4: Force Cache Clear ***
+if "master_data_v1_4" not in st.session_state:
+    st.session_state["master_data_v1_4"] = load_lookup_v1_4()
+master_lookup, global_name_lookup, lastname_lookup, db_status = st.session_state["master_data_v1_4"]
 
 def detect_sport(bio):
     text = str(bio).lower()
@@ -227,35 +202,18 @@ def detect_sport(bio):
     fb_score = sum(text.count(w) for w in FOOTBALL_INDICATORS)
     return "Football" if fb_score > 0 else None
 
-def determine_role_v1_3(title, bio_text):
+def determine_role_v1_4(title, bio_text):
     title_lower = str(title).lower()
-    
     if "coach" in title_lower: return "COACH/STAFF"
-
-    strong_staff = [
-        "coordinator", "director", "manager", "analyst", 
-        "assistant", "specialist", "trainer", "video", "recruiting", 
-        "personnel", "chief", "scout", "dietitian", "nutrition", 
-        "ga", "grad assistant", "intern", "fellow", "admin", "strength", 
-        "conditioning", "performance", "player dev", "exec", "head", "gm", "ops"
-    ]
+    strong_staff = ["coordinator", "director", "manager", "analyst", "assistant", "specialist", "trainer", "video", "recruiting", "personnel", "chief", "scout", "dietitian", "nutrition", "ga", "grad assistant", "intern", "fellow", "admin", "strength", "conditioning", "performance", "player dev", "exec", "head", "gm", "ops"]
     if any(k in title_lower for k in strong_staff): return "COACH/STAFF"
-
-    strong_player = [
-        "quarterback", "running back", "wide receiver", "tight end", 
-        "offensive line", "defensive line", "linebacker", "defensive back",
-        "cornerback", "safety", "kicker", "punter", "snapper",
-        "qb", "rb", "wr", "te", "ol", "dl", "lb", "db", "cb", "s", "k", "p", "ls",
-        "athlete", "edge", "rush", "tackle", "guard", "center"
-    ]
+    strong_player = ["quarterback", "running back", "wide receiver", "tight end", "offensive line", "defensive line", "linebacker", "defensive back", "cornerback", "safety", "kicker", "punter", "snapper", "qb", "rb", "wr", "te", "ol", "dl", "lb", "db", "cb", "s", "k", "p", "ls", "athlete", "edge", "rush", "tackle", "guard", "center"]
     if any(p in title_lower for p in strong_player): return "PLAYER"
-    
     bio_sample = str(bio_text)[:800].lower()
     if any(f in bio_sample for f in ["class:", "height:", "weight:", "hometown:", "lbs"]): return "PLAYER"
-        
     return "PLAYER"
 
-def parse_header_v1_3(bio):
+def parse_header_v1_4(bio):
     lines = [L.strip() for L in str(bio).split('\n') if L.strip()][:15]
     header = None
     for delimiter in [" - ", " | ", " : "]:
@@ -279,7 +237,7 @@ def parse_header_v1_3(bio):
     for alias, real in SCHOOL_ALIASES.items():
         if alias.lower() in extracted['School'].lower(): extracted['School'] = real
         
-    extracted['Role'] = determine_role_v1_3(extracted['Title'], bio)
+    extracted['Role'] = determine_role_v1_4(extracted['Title'], bio)
     return extracted
 
 def get_snippet(text, keyword):
@@ -330,15 +288,18 @@ if submit_button and keywords_str:
                     matches = df_chunk[mask].copy()
                     
                     for idx, row in matches.iterrows():
-                        meta = parse_header_v1_3(row['Full_Bio'])
+                        meta = parse_header_v1_4(row['Full_Bio'])
                         name = meta['Name'] or "Unknown"
                         
+                        # --- V1.4 GARBAGE FILTER ---
                         if any(b.lower() in str(name).lower() for b in BAD_NAMES): continue
+                        if "football" in str(name).lower() or "athletics" in str(name).lower(): continue
+                        
                         if detect_sport(row['Full_Bio']) != "Football": continue
                         
-                        s_key = normalize_text_v1_3(meta['School'])
-                        n_key = normalize_text_v1_3(name)
-                        l_key = normalize_text_v1_3(meta['Last'])
+                        s_key = normalize_text_v1_4(meta['School'])
+                        n_key = normalize_text_v1_4(name)
+                        l_key = normalize_text_v1_4(meta['Last'])
                         
                         match = {}
                         if (s_key, n_key) in master_lookup:
