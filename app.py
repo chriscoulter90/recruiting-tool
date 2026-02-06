@@ -50,17 +50,22 @@ st.markdown("""
 # --- 2. CONSTANTS & FILES ---
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
-# EXPANDED STAFF LIST
-STAFF_KEYWORDS = [
-    "coach", "director", "coordinator", "assistant", "manager", "analyst", 
-    "specialist", "trainer", "video", "operations", "quality control", "qc",
-    "recruiting", "personnel", "chief of staff", "scout", "dietitian", "nutrition",
-    "ga", "grad assistant", "graduate assistant", "intern", "fellow", "admin",
-    "s&c", "strength", "conditioning", "performance", "player dev", "development",
-    "exec", "executive", "sr.", "jr.", "head", "asst", "tech", "media", "creative"
+# KEYWORDS FOR SCORING SYSTEM
+COACH_KEYWORDS = [
+    "coach", "director", "coordinator", "assistant", "analyst", "specialist", 
+    "manager", "recruiting", "personnel", "scout", "operations", "quality control",
+    "graduate assistant", "video", "trainer", "dietitian", "nutrition", "chief of staff",
+    "head coach", "associate", "hired", "joined the staff", "coaching career"
 ]
 
-PLAYER_BIO_KEYWORDS = ["height:", "weight:", "class:", "hometown:", "high school:", "lbs", "freshman", "sophomore", "junior", "senior"]
+PLAYER_KEYWORDS = [
+    "redshirt", "freshman", "sophomore", "junior", "senior", "class:", 
+    "height:", "weight:", "lbs", "high school:", "prev school:", "transfer from",
+    "signed with", "committed to", "wide receiver", "linebacker", "quarterback",
+    "defensive back", "running back", "tight end", "offensive line", "defensive line",
+    "db", "wr", "qb", "rb", "te", "ol", "dl", "lb", "ls", "punter", "kicker"
+]
+
 FOOTBALL_INDICATORS = ["football", "quarterback", "linebacker", "touchdown", "nfl", "bowl", "recruiting", "fbs", "fcs", "interception", "tackle", "gridiron"]
 NON_FOOTBALL_INDICATORS = {
     "Volleyball": ["volleyball", "set", "spike", "libero"], "Baseball": ["baseball", "inning", "homerun", "pitcher"],
@@ -168,26 +173,40 @@ def detect_sport(bio):
         if sum(text.count(w) for w in keywords) > fb_score + 1: return None
     return "Football"
 
-def determine_role(title, bio_text):
-    # 1. Check Bio for Player Signs (Strongest Indicator for Players)
-    bio_sample = str(bio_text)[:600].lower()
-    if any(k in bio_sample for k in PLAYER_BIO_KEYWORDS):
+def determine_role_by_score(title, bio_text):
+    text = (str(title) + " " + str(bio_text)[:600]).lower()
+    
+    # Points System
+    coach_score = 0
+    player_score = 0
+    
+    # Check Coach Keywords
+    for k in COACH_KEYWORDS:
+        if k in text:
+            # Boost score for strong titles found in the Title field specifically
+            if k in str(title).lower():
+                coach_score += 3
+            else:
+                coach_score += 1
+                
+    # Check Player Keywords
+    for k in PLAYER_KEYWORDS:
+        # Strict check for class/height/weight indicators
+        if k in ["class:", "height:", "weight:", "high school:", "prev school:"] and k in text:
+            player_score += 5 # Almost certainly a player
+        elif k in text:
+            player_score += 1
+
+    # Tie-breaker: If Title is just a position (e.g., "Wide Receiver"), it's a player
+    if str(title).lower() in ["wide receiver", "quarterback", "running back", "defensive back", "linebacker", "offensive line", "defensive line", "tight end", "punter", "kicker", "long snapper"]:
+        player_score += 5
+
+    if coach_score > player_score:
+        return "COACH/STAFF"
+    else:
         return "PLAYER"
-    
-    # 2. Check Title for Expanded Staff Keywords
-    title_lower = str(title).lower()
-    if any(k in title_lower for k in STAFF_KEYWORDS):
-        return "COACH/STAFF"
-        
-    # 3. Double Check Bio for Staff Titles (Fix for Travis Fisher)
-    if any(k in bio_sample for k in STAFF_KEYWORDS):
-        return "COACH/STAFF"
-    
-    return "PLAYER"
 
 def extract_real_title(bio):
-    # Try to find a better title in the body text if the header failed
-    # Look for "Title: X" or "Position: X"
     match = re.search(r'(?:Title|Position)[:\s]+([A-Za-z \-\&]+?)(?=\n|Email|Phone|Bio)', str(bio), re.IGNORECASE)
     if match:
         return match.group(1).strip()
@@ -210,22 +229,20 @@ def parse_header(bio):
             extracted['School'] = parts[-1].strip()
             if len(parts) > 2: extracted['Title'] = parts[1].strip()
     
-    # IMPROVED: If Title looks like a school name or is generic, scan the bio for the REAL title
     if "University" in extracted['Title'] or "Athletics" in extracted['Title'] or extracted['Title'] == "Unknown":
         better_title = extract_real_title(bio)
         if better_title:
             extracted['Title'] = better_title
 
-    # Normalize School
     for alias, real in SCHOOL_ALIASES.items():
         if alias.lower() in extracted['School'].lower(): extracted['School'] = real
         
-    extracted['Role'] = determine_role(extracted['Title'], bio)
+    # Use Scoring System
+    extracted['Role'] = determine_role_by_score(extracted['Title'], bio)
     
     return extracted
 
 def get_snippet(text, keyword):
-    # Clean text for CSV safety
     clean_text = str(text).replace(chr(10), ' ').replace(chr(13), ' ')
     m = re.search(re.escape(keyword), clean_text, re.IGNORECASE)
     if m: 
@@ -311,10 +328,8 @@ if submit_button and keywords_str:
 
         if results_found:
             df_res = pd.DataFrame(results_found).drop_duplicates(subset=['Name', 'School'])
-            # FLATTEN BIO AND CONTEXT FOR EXCEL
             df_res['Full_Bio'] = df_res['Full_Bio'].astype(str).str.replace(r'[\r\n]+', ' ', regex=True)
             df_res['Context'] = df_res['Context'].astype(str).str.replace(r'[\r\n]+', ' ', regex=True)
-            
             df_res.sort_values(by=['Role', 'Name'], ascending=[True, True], inplace=True)
             st.session_state['search_results'] = df_res
         else:
@@ -334,10 +349,9 @@ if not st.session_state['search_results'].empty:
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         final_df.to_excel(writer, index=False, sheet_name="Results")
         worksheet = writer.sheets['Results']
-        # EXCEL COLUMN WIDTHS
-        worksheet.set_column(0, 0, 15) # Role
-        worksheet.set_column(1, 5, 25) # Name, Title, School, Email, Twitter
-        worksheet.set_column(6, 6, 50) # Context
-        worksheet.set_column(7, 7, 50) # Full Bio
+        worksheet.set_column(0, 0, 15)
+        worksheet.set_column(1, 5, 25)
+        worksheet.set_column(6, 6, 50)
+        worksheet.set_column(7, 7, 50)
     
     st.download_button("💾 DOWNLOAD EXCEL", buffer.getvalue(), file_name_dynamic, "application/vnd.ms-excel")
