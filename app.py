@@ -9,7 +9,7 @@ import pandas as pd
 from datetime import datetime
 
 # --- 1. CONFIGURATION & STYLES ---
-st.set_page_config(page_title="Coulter Recruiting v1.5", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="Coulter Recruiting v1.6", page_icon="🏈", layout="wide")
 
 st.markdown("""
     <style>
@@ -47,7 +47,7 @@ st.markdown("""
 
 st.markdown("""
     <div class="header-container">
-        <div class="version-tag">v1.5</div>
+        <div class="version-tag">v1.6</div>
         <div class="main-title">🏈 COULTER RECRUITING</div>
         <div class="sub-title">Football Search Engine</div>
     </div>
@@ -78,7 +78,7 @@ SCHOOL_ALIASES = {
 }
 
 # --- 3. HELPER FUNCTIONS ---
-def normalize_text_v1_5(text):
+def normalize_text_v1_6(text):
     if pd.isna(text): return ""
     text = str(text).lower()
     text = text.replace('.', '').replace("'", "").strip()
@@ -87,7 +87,7 @@ def normalize_text_v1_5(text):
     return re.sub(r'[^a-z0-9]', '', text).strip()
 
 @st.cache_data(show_spinner=False)
-def load_lookup_v1_5():
+def load_lookup_v1_6():
     """Load coach database with TEAM PHOBIC COLUMN DETECTION."""
     df = None
     try:
@@ -179,9 +179,9 @@ def load_lookup_v1_5():
 
             rec = {'email': email, 'twitter': twitter, 'title': title, 'school': raw_school, 'name': full_name}
             
-            s_key = normalize_text_v1_5(raw_school)
-            n_key = normalize_text_v1_5(full_name)
-            l_key = normalize_text_v1_5(last)
+            s_key = normalize_text_v1_6(raw_school)
+            n_key = normalize_text_v1_6(full_name)
+            l_key = normalize_text_v1_6(last)
             
             if s_key: lookup[(s_key, n_key)] = rec
             if n_key not in global_name_lookup: global_name_lookup[n_key] = rec
@@ -191,10 +191,10 @@ def load_lookup_v1_5():
             
     return lookup, global_name_lookup, lastname_lookup, "Success"
 
-# *** V1.5: Cache Clear ***
-if "master_data_v1_5" not in st.session_state:
-    st.session_state["master_data_v1_5"] = load_lookup_v1_5()
-master_lookup, global_name_lookup, lastname_lookup, db_status = st.session_state["master_data_v1_5"]
+# *** V1.6: Cache Clear ***
+if "master_data_v1_6" not in st.session_state:
+    st.session_state["master_data_v1_6"] = load_lookup_v1_6()
+master_lookup, global_name_lookup, lastname_lookup, db_status = st.session_state["master_data_v1_6"]
 
 def detect_sport(bio):
     text = str(bio).lower()
@@ -202,7 +202,7 @@ def detect_sport(bio):
     fb_score = sum(text.count(w) for w in FOOTBALL_INDICATORS)
     return "Football" if fb_score > 0 else None
 
-def determine_role_v1_5(title, bio_text):
+def determine_role_v1_6(title, bio_text):
     title_lower = str(title).lower()
     if "coach" in title_lower: return "COACH/STAFF"
 
@@ -216,7 +216,7 @@ def determine_role_v1_5(title, bio_text):
     if any(f in bio_sample for f in ["class:", "height:", "weight:", "hometown:", "lbs"]): return "PLAYER"
     return "PLAYER"
 
-def parse_header_v1_5(bio):
+def parse_header_v1_6(bio):
     lines = [L.strip() for L in str(bio).split('\n') if L.strip()][:15]
     header = None
     for delimiter in [" - ", " | ", " : "]:
@@ -240,7 +240,7 @@ def parse_header_v1_5(bio):
     for alias, real in SCHOOL_ALIASES.items():
         if alias.lower() in extracted['School'].lower(): extracted['School'] = real
         
-    extracted['Role'] = determine_role_v1_5(extracted['Title'], bio)
+    extracted['Role'] = determine_role_v1_6(extracted['Title'], bio)
     return extracted
 
 def get_snippet(text, keyword):
@@ -291,16 +291,16 @@ if submit_button and keywords_str:
                     matches = df_chunk[mask].copy()
                     
                     for idx, row in matches.iterrows():
-                        meta = parse_header_v1_5(row['Full_Bio'])
+                        meta = parse_header_v1_6(row['Full_Bio'])
                         name = meta['Name'] or "Unknown"
                         
                         if any(b.lower() in str(name).lower() for b in BAD_NAMES): continue
                         if "football" in str(name).lower() or "athletics" in str(name).lower(): continue
                         if detect_sport(row['Full_Bio']) != "Football": continue
                         
-                        s_key = normalize_text_v1_5(meta['School'])
-                        n_key = normalize_text_v1_5(name)
-                        l_key = normalize_text_v1_5(meta['Last'])
+                        s_key = normalize_text_v1_6(meta['School'])
+                        n_key = normalize_text_v1_6(name)
+                        l_key = normalize_text_v1_6(meta['Last'])
                         
                         match = {}
                         if (s_key, n_key) in master_lookup:
@@ -311,7 +311,6 @@ if submit_button and keywords_str:
                             match = lastname_lookup[(s_key, l_key)][0]
 
                         # --- v1.5 DATA AUTHORITY FIX ---
-                        # If we have data from the Master Coach DB, they are a Coach.
                         has_twitter = match.get('twitter') and len(str(match['twitter'])) > 3
                         has_email = match.get('email') and len(str(match['email'])) > 3
                         if has_twitter or has_email:
@@ -339,7 +338,10 @@ if submit_button and keywords_str:
             df_res = pd.DataFrame(results_found).drop_duplicates(subset=['Name', 'School'])
             df_res['Full_Bio'] = df_res['Full_Bio'].astype(str).str.replace(r'[\r\n]+', ' ', regex=True)
             df_res['Context'] = df_res['Context'].astype(str).str.replace(r'[\r\n]+', ' ', regex=True)
-            df_res.sort_values(by=['Role', 'Name'], ascending=[True, True], inplace=True)
+            
+            # --- V1.6 SORTING FIX: ROLE -> SCHOOL -> NAME ---
+            df_res.sort_values(by=['Role', 'School', 'Name'], ascending=[True, True, True], inplace=True)
+            
             st.session_state['search_results'] = df_res
         else:
             st.session_state['search_results'] = pd.DataFrame()
