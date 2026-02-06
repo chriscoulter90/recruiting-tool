@@ -9,7 +9,7 @@ import pandas as pd
 from datetime import datetime
 
 # --- 1. CONFIGURATION & STYLES ---
-st.set_page_config(page_title="Coulter Recruiting v1.11", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="Coulter Recruiting v1.12", page_icon="🏈", layout="wide")
 
 st.markdown("""
     <style>
@@ -47,7 +47,7 @@ st.markdown("""
 
 st.markdown("""
     <div class="header-container">
-        <div class="version-tag">v1.11</div>
+        <div class="version-tag">v1.12</div>
         <div class="main-title">🏈 COULTER RECRUITING</div>
         <div class="sub-title">Football Search Engine</div>
     </div>
@@ -85,7 +85,7 @@ SCHOOL_ALIASES = {
 }
 
 # --- 3. HELPER FUNCTIONS ---
-def normalize_text_v1_11(text):
+def normalize_text_v1_12(text):
     if pd.isna(text): return ""
     text = str(text).lower()
     text = text.replace('.', '').replace("'", "").strip()
@@ -94,7 +94,7 @@ def normalize_text_v1_11(text):
     return re.sub(r'[^a-z0-9]', '', text).strip()
 
 @st.cache_data(show_spinner=False)
-def load_lookup_v1_11():
+def load_lookup_v1_12():
     """Load coach database with TEAM PHOBIC COLUMN DETECTION."""
     df = None
     try:
@@ -186,9 +186,9 @@ def load_lookup_v1_11():
 
             rec = {'email': email, 'twitter': twitter, 'title': title, 'school': raw_school, 'name': full_name}
             
-            s_key = normalize_text_v1_11(raw_school)
-            n_key = normalize_text_v1_11(full_name)
-            l_key = normalize_text_v1_11(last)
+            s_key = normalize_text_v1_12(raw_school)
+            n_key = normalize_text_v1_12(full_name)
+            l_key = normalize_text_v1_12(last)
             
             if s_key: lookup[(s_key, n_key)] = rec
             if n_key not in global_name_lookup: global_name_lookup[n_key] = rec
@@ -198,10 +198,10 @@ def load_lookup_v1_11():
             
     return lookup, global_name_lookup, lastname_lookup, "Success"
 
-# *** V1.11: Cache Clear ***
-if "master_data_v1_11" not in st.session_state:
-    st.session_state["master_data_v1_11"] = load_lookup_v1_11()
-master_lookup, global_name_lookup, lastname_lookup, db_status = st.session_state["master_data_v1_11"]
+# *** V1.12: Cache Clear ***
+if "master_data_v1_12" not in st.session_state:
+    st.session_state["master_data_v1_12"] = load_lookup_v1_12()
+master_lookup, global_name_lookup, lastname_lookup, db_status = st.session_state["master_data_v1_12"]
 
 def detect_sport(bio):
     text = str(bio).lower()
@@ -221,7 +221,7 @@ def clean_player_title(title, bio_text):
     if "assistant" in t_clean or "coach" in t_clean or "manager" in t_clean: return title
     return "Football"
 
-def determine_role_v1_11(title, bio_text):
+def determine_role_v1_12(title, bio_text):
     title_lower = str(title).lower()
     if "coach" in title_lower: return "COACH/STAFF"
 
@@ -235,7 +235,7 @@ def determine_role_v1_11(title, bio_text):
     if any(f in bio_sample for f in ["class:", "height:", "weight:", "hometown:", "lbs"]): return "PLAYER"
     return "PLAYER"
 
-def parse_header_v1_11(bio):
+def parse_header_v1_12(bio):
     lines = [L.strip() for L in str(bio).split('\n') if L.strip()][:15]
     header = None
     for delimiter in [" - ", " | ", " : "]:
@@ -259,45 +259,44 @@ def parse_header_v1_11(bio):
     for alias, real in SCHOOL_ALIASES.items():
         if alias.lower() in extracted['School'].lower(): extracted['School'] = real
         
-    extracted['Role'] = determine_role_v1_11(extracted['Title'], bio)
+    extracted['Role'] = determine_role_v1_12(extracted['Title'], bio)
     
-    # --- V1.8: FORCE FOOTBALL TITLE FOR PLAYERS ---
     if extracted['Role'] == 'PLAYER':
         extracted['Title'] = "Football"
         
     return extracted
 
 def get_smart_snippet(text, keyword):
-    """V1.9: Prioritizes HOMETOWN/NATIVE/PERSONAL context over just the first match."""
+    """V1.12: FORCE SNAP to KEYWORD."""
     clean_text = str(text).replace(chr(10), ' ').replace(chr(13), ' ')
     
-    # Find ALL occurrences of the keyword
+    # 1. Look for Matches
     matches = list(re.finditer(re.escape(keyword), clean_text, re.IGNORECASE))
     
+    # If NO match found, return start of text
     if not matches:
-        return clean_text[:100] + "..."
+        return clean_text[:120] + "..."
     
     best_snippet = None
     max_score = -1
     
-    # Words that indicate "This is the part about where they are from"
+    # Prioritize context
     priority_words = ["hometown", "native", "high school", "born", "raised", "from", "attended", "product of"]
     
     for m in matches:
-        # Extract a window around the keyword
         start = max(0, m.start() - 60)
         end = min(len(clean_text), m.end() + 60)
         snippet = clean_text[start:end]
         
-        # Score it
         score = 0
         snippet_lower = snippet.lower()
         for p in priority_words:
             if p in snippet_lower:
-                score += 1
+                score += 10 # Big boost for hometown context
         
-        # Prefer the snippet with the most context words
-        # Or if tie, prefer the one that isn't the very first one (often a header)
+        # Penalize if it looks like a menu item (very short lines)
+        if len(snippet) < 30: score -= 5
+        
         if score > max_score:
             max_score = score
             best_snippet = f"...{snippet}..."
@@ -317,110 +316,117 @@ with col2:
         submit_button = st.form_submit_button(label='Search')
 
 if 'search_results' not in st.session_state:
-    st.session_state['search_results'] = pd.DataFrame()
+    st.session_state['search_results'] = {} # Dict for multiple sheets
 if 'last_keywords' not in st.session_state:
     st.session_state['last_keywords'] = ""
 
 if submit_button and keywords_str:
-    keywords = [k.strip() for k in keywords_str.split(',') if k.strip()]
-    pattern = '|'.join([re.escape(k) for k in keywords])
+    # SPLIT KEYWORDS for Tabs
+    keywords_list = [k.strip() for k in keywords_str.split(',') if k.strip()]
     st.session_state['last_keywords'] = keywords_str
     
     chunk_files = glob.glob("chunk_*.csv")
     chunk_files.sort()
     
+    all_results = {} # Store DF for each keyword
+    
     if not chunk_files:
         st.error("❌ No database files found on server.")
     else:
-        results_found = []
         progress_bar = st.progress(0)
         
-        for i, file in enumerate(chunk_files):
-            try:
-                df_chunk = pd.read_csv(file, usecols=['Full_Bio'], dtype=str, on_bad_lines='skip').fillna("")
-                mask = df_chunk['Full_Bio'].str.contains(pattern, case=False, na=False, regex=True)
-                
-                if mask.any():
-                    matches = df_chunk[mask].copy()
+        # Run search for EACH keyword separately
+        for k_idx, kw in enumerate(keywords_list):
+            results_found = []
+            pattern = re.escape(kw) # Search JUST this keyword
+            
+            for i, file in enumerate(chunk_files):
+                try:
+                    df_chunk = pd.read_csv(file, usecols=['Full_Bio'], dtype=str, on_bad_lines='skip').fillna("")
+                    mask = df_chunk['Full_Bio'].str.contains(pattern, case=False, na=False, regex=True)
                     
-                    for idx, row in matches.iterrows():
-                        meta = parse_header_v1_11(row['Full_Bio'])
-                        name = meta['Name'] or "Unknown"
-                        
-                        if any(b.lower() in str(name).lower() for b in BAD_NAMES): continue
-                        if "football" in str(name).lower() or "athletics" in str(name).lower(): continue
-                        
-                        # --- v1.7: IMPROVED SPORT DETECTION ---
-                        if detect_sport(row['Full_Bio']) != "Football": continue
-                        
-                        s_key = normalize_text_v1_11(meta['School'])
-                        n_key = normalize_text_v1_11(name)
-                        l_key = normalize_text_v1_11(meta['Last'])
-                        
-                        match = {}
-                        if (s_key, n_key) in master_lookup:
-                            match = master_lookup[(s_key, n_key)]
-                        elif n_key in global_name_lookup:
-                            match = global_name_lookup[n_key]
-                        elif (s_key, l_key) in lastname_lookup:
-                            match = lastname_lookup[(s_key, l_key)][0]
+                    if mask.any():
+                        matches = df_chunk[mask].copy()
+                        for idx, row in matches.iterrows():
+                            meta = parse_header_v1_12(row['Full_Bio'])
+                            name = meta['Name'] or "Unknown"
+                            
+                            if any(b.lower() in str(name).lower() for b in BAD_NAMES): continue
+                            if "football" in str(name).lower() or "athletics" in str(name).lower(): continue
+                            if detect_sport(row['Full_Bio']) != "Football": continue
+                            
+                            s_key = normalize_text_v1_12(meta['School'])
+                            n_key = normalize_text_v1_12(name)
+                            l_key = normalize_text_v1_12(meta['Last'])
+                            
+                            match = {}
+                            if (s_key, n_key) in master_lookup:
+                                match = master_lookup[(s_key, n_key)]
+                            elif n_key in global_name_lookup:
+                                match = global_name_lookup[n_key]
+                            elif (s_key, l_key) in lastname_lookup:
+                                match = lastname_lookup[(s_key, l_key)][0]
 
-                        # --- v1.5 DATA AUTHORITY FIX ---
-                        has_twitter = match.get('twitter') and len(str(match['twitter'])) > 3
-                        has_email = match.get('email') and len(str(match['email'])) > 3
-                        if has_twitter or has_email:
-                            meta['Role'] = 'COACH/STAFF'
+                            has_twitter = match.get('twitter') and len(str(match['twitter'])) > 3
+                            has_email = match.get('email') and len(str(match['email'])) > 3
+                            if has_twitter or has_email:
+                                meta['Role'] = 'COACH/STAFF'
 
-                        # --- v1.9: SMART SNIPPET ---
-                        snippet = get_smart_snippet(row['Full_Bio'], keywords[0])
+                            # Force Snippet to match CURRENT Keyword
+                            snippet = get_smart_snippet(row['Full_Bio'], kw)
 
-                        results_found.append({
-                            'Role': meta['Role'],
-                            'Name': name,
-                            'Title': match.get('title') or meta['Title'],
-                            'School': match.get('school') or meta['School'],
-                            'Email': match.get('email', ''),
-                            'Twitter': match.get('twitter', ''),
-                            'Context': snippet,
-                            'Full_Bio': row['Full_Bio']
-                        })
-                
-                del df_chunk
-                gc.collect()
-            except Exception: continue
-            progress_bar.progress((i + 1) / len(chunk_files))
+                            results_found.append({
+                                'Role': meta['Role'],
+                                'Name': name,
+                                'Title': match.get('title') or meta['Title'],
+                                'School': match.get('school') or meta['School'],
+                                'Email': match.get('email', ''),
+                                'Twitter': match.get('twitter', ''),
+                                'Context': snippet,
+                                'Full_Bio': row['Full_Bio']
+                            })
+                    del df_chunk
+                    gc.collect()
+                except Exception: continue
+                # Shared progress bar
+                progress_bar.progress((i + 1 + (k_idx * len(chunk_files))) / (len(chunk_files) * len(keywords_list)))
 
+            if results_found:
+                df_res = pd.DataFrame(results_found).drop_duplicates(subset=['Name', 'School'])
+                df_res['Full_Bio'] = df_res['Full_Bio'].astype(str).str.replace(r'[\r\n]+', ' ', regex=True)
+                df_res['Context'] = df_res['Context'].astype(str).str.replace(r'[\r\n]+', ' ', regex=True)
+                df_res.sort_values(by=['Role', 'School', 'Name'], ascending=[True, True, True], inplace=True)
+                all_results[kw] = df_res
+            
         progress_bar.empty()
+        st.session_state['search_results'] = all_results
 
-        if results_found:
-            df_res = pd.DataFrame(results_found).drop_duplicates(subset=['Name', 'School'])
-            df_res['Full_Bio'] = df_res['Full_Bio'].astype(str).str.replace(r'[\r\n]+', ' ', regex=True)
-            df_res['Context'] = df_res['Context'].astype(str).str.replace(r'[\r\n]+', ' ', regex=True)
-            
-            # --- V1.6 SORTING FIX: ROLE -> SCHOOL -> NAME ---
-            df_res.sort_values(by=['Role', 'School', 'Name'], ascending=[True, True, True], inplace=True)
-            
-            st.session_state['search_results'] = df_res
-        else:
-            st.session_state['search_results'] = pd.DataFrame()
-            st.warning("No matches found.")
+if st.session_state['search_results']:
+    results = st.session_state['search_results']
+    st.success(f"🎉 Search Complete. Found results for: {', '.join(results.keys())}")
+    
+    # Display Tabs
+    tabs = st.tabs(list(results.keys()))
+    for i, kw in enumerate(results.keys()):
+        with tabs[i]:
+            st.dataframe(results[kw], column_config={"Full_Bio": None}, use_container_width=True, hide_index=True)
 
-if not st.session_state['search_results'].empty:
-    final_df = st.session_state['search_results']
-    st.success(f"🎉 Found {len(final_df)} matches.")
+    # Clean Filename (Removed "Search")
+    safe_kw = re.sub(r'[^a-zA-Z0-9]', '_', st.session_state['last_keywords'][:30])
+    file_name_dynamic = f"{safe_kw}_{datetime.now().date()}.xlsx"
     
-    st.dataframe(final_df, column_config={"Full_Bio": None}, use_container_width=True, hide_index=True)
-    
-    safe_kw = re.sub(r'[^a-zA-Z0-9]', '_', st.session_state['last_keywords'][:20])
-    file_name_dynamic = f"Search_{safe_kw}_{datetime.now().date()}.xlsx"
-    
+    # Multi-Sheet Excel Writer
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-        final_df.to_excel(writer, index=False, sheet_name="Results")
-        worksheet = writer.sheets['Results']
-        worksheet.set_column(0, 0, 15)
-        worksheet.set_column(1, 5, 25)
-        worksheet.set_column(6, 6, 50)
-        worksheet.set_column(7, 7, 50)
+        for kw, df in results.items():
+            # Clean sheet name (max 31 chars, no special chars)
+            sheet_name = re.sub(r'[^a-zA-Z0-9 ]', '', kw)[:30]
+            df.to_excel(writer, index=False, sheet_name=sheet_name)
+            
+            worksheet = writer.sheets[sheet_name]
+            worksheet.set_column(0, 0, 15)
+            worksheet.set_column(1, 5, 25)
+            worksheet.set_column(6, 6, 50)
+            worksheet.set_column(7, 7, 50)
     
     st.download_button("💾 DOWNLOAD EXCEL", buffer.getvalue(), file_name_dynamic, "application/vnd.ms-excel")
