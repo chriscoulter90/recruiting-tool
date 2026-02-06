@@ -50,12 +50,16 @@ st.markdown("""
 # --- 2. CONSTANTS & FILES ---
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
-# STRICT FILTER LISTS
+# EXPANDED STAFF LIST (To fix "Simpson" issue)
 STAFF_KEYWORDS = [
     "coach", "director", "coordinator", "assistant", "manager", "analyst", 
-    "specialist", "trainer", "video", "operations", "quality control", 
-    "recruiting", "personnel", "chief of staff", "scout", "dietitian", "nutrition"
+    "specialist", "trainer", "video", "operations", "quality control", "qc",
+    "recruiting", "personnel", "chief of staff", "scout", "dietitian", "nutrition",
+    "ga", "grad assistant", "graduate assistant", "intern", "fellow", "admin",
+    "s&c", "strength", "conditioning", "performance", "player dev", "development",
+    "exec", "executive", "sr.", "jr.", "head", "asst", "tech", "media", "creative"
 ]
+
 PLAYER_BIO_KEYWORDS = ["height:", "weight:", "class:", "hometown:", "high school:", "lbs", "freshman", "sophomore", "junior", "senior"]
 FOOTBALL_INDICATORS = ["football", "quarterback", "linebacker", "touchdown", "nfl", "bowl", "recruiting", "fbs", "fcs", "interception", "tackle", "gridiron"]
 NON_FOOTBALL_INDICATORS = {
@@ -144,8 +148,11 @@ def load_lookup():
             l_key = normalize_text(last)
             
             if s_key: lookup[(s_key, n_key)] = rec
+            
+            # GLOBAL NAME MATCH (Crucial Fix for Missing Emails)
             if n_key not in name_lookup: name_lookup[n_key] = []
             name_lookup[n_key].append(rec)
+            
             if s_key:
                 if (s_key, l_key) not in lastname_lookup: lastname_lookup[(s_key, l_key)] = []
                 lastname_lookup[(s_key, l_key)].append(rec)
@@ -165,17 +172,17 @@ def detect_sport(bio):
     return "Football"
 
 def determine_role(title, bio_text):
-    # 1. Check Bio for Player Signs (Strongest Indicator)
+    # 1. Check Bio for Player Signs
     bio_sample = str(bio_text)[:600].lower()
     if any(k in bio_sample for k in PLAYER_BIO_KEYWORDS):
         return "PLAYER"
     
-    # 2. Check Title for Explicit Staff Keywords
+    # 2. Check Title for Expanded Staff Keywords
     title_lower = str(title).lower()
     if any(k in title_lower for k in STAFF_KEYWORDS):
         return "COACH/STAFF"
     
-    # 3. Default to Player if no Staff keyword found
+    # 3. Default
     return "PLAYER"
 
 def parse_header(bio):
@@ -195,11 +202,9 @@ def parse_header(bio):
             extracted['School'] = parts[-1].strip()
             if len(parts) > 2: extracted['Title'] = parts[1].strip()
             
-    # Normalize School
     for alias, real in SCHOOL_ALIASES.items():
         if alias.lower() in extracted['School'].lower(): extracted['School'] = real
         
-    # Determine Role (Smart Filter)
     extracted['Role'] = determine_role(extracted['Title'], bio)
     
     return extracted
@@ -263,12 +268,15 @@ if submit_button and keywords_str:
                         l_key = normalize_text(meta['Last'])
                         
                         match = {}
+                        # 1. Exact School Match
                         if (s_key, n_key) in master_lookup:
                             match = master_lookup[(s_key, n_key)]
-                        elif (s_key, l_key) in lastname_lookup:
-                            match = lastname_lookup[(s_key, l_key)][0]
+                        # 2. GLOBAL Name Match (Fixes "FSU" vs "Florida State" mismatch)
                         elif n_key in name_lookup:
                             match = name_lookup[n_key][0]
+                        # 3. Last Name Fallback
+                        elif (s_key, l_key) in lastname_lookup:
+                            match = lastname_lookup[(s_key, l_key)][0]
 
                         results_found.append({
                             'Role': meta['Role'],
@@ -312,7 +320,7 @@ if not st.session_state['search_results'].empty:
         worksheet = writer.sheets['Results']
         worksheet.set_column(0, 0, 15)
         worksheet.set_column(1, 5, 30)
-        worksheet.set_column(6, 6, 50) # Context (Wide)
-        worksheet.set_column(7, 7, 50) # Full Bio (Wide)
+        worksheet.set_column(6, 6, 50) 
+        worksheet.set_column(7, 7, 50)
     
     st.download_button("💾 DOWNLOAD EXCEL", buffer.getvalue(), file_name_dynamic, "application/vnd.ms-excel")
