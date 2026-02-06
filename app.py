@@ -50,6 +50,7 @@ st.markdown("""
 # --- 2. CONSTANTS & FILES ---
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlkZMTn0NP0PitRonCKXyjGCRjLmms/export?format=csv&gid=1572560106"
 
+# FOOTBALL SEARCH TERMS
 FOOTBALL_INDICATORS = ["football", "quarterback", "linebacker", "touchdown", "nfl", "bowl", "recruiting", "fbs", "fcs", "interception", "tackle", "gridiron"]
 NON_FOOTBALL_INDICATORS = {
     "Volleyball": ["volleyball", "set", "spike", "libero"], "Baseball": ["baseball", "inning", "homerun", "pitcher"],
@@ -136,6 +137,7 @@ def load_lookup():
             n_key = normalize_text(full_name)
             l_key = normalize_text(last)
             
+            # BUILD MATCHING KEYS
             if s_key: lookup[(s_key, n_key)] = rec
             if n_key not in name_lookup: name_lookup[n_key] = []
             name_lookup[n_key].append(rec)
@@ -145,9 +147,10 @@ def load_lookup():
             
     return lookup, name_lookup, lastname_lookup, "Success"
 
-if "master_data" not in st.session_state:
-    st.session_state["master_data"] = load_lookup()
-master_lookup, name_lookup, lastname_lookup, db_status = st.session_state["master_data"]
+# *** KEY CHANGE: Renamed to v2 to FORCE CACHE RELOAD ***
+if "master_data_v2" not in st.session_state:
+    st.session_state["master_data_v2"] = load_lookup()
+master_lookup, name_lookup, lastname_lookup, db_status = st.session_state["master_data_v2"]
 
 def detect_sport(bio):
     text = str(bio).lower()
@@ -160,9 +163,9 @@ def detect_sport(bio):
 def determine_role(title, bio_text):
     title_lower = str(title).lower()
     
-    # 1. AUTHORITY CHECK: STAFF KEYWORDS
-    # If the Title contains ANY of these, it is AUTOMATICALLY a Coach.
-    # No looking at the bio. No points system.
+    # --- AUTHORITY RULE 1: STAFF KEYWORDS ---
+    # If the title says Coach/Director/Manager/Analyst, THEY ARE STAFF.
+    # We do NOT check the bio if this matches. This prevents "Menu Text" from tricking us.
     strong_staff_keywords = [
         "coach", "coordinator", "director", "manager", "analyst", 
         "assistant", "specialist", "trainer", "video", "recruiting", 
@@ -172,12 +175,11 @@ def determine_role(title, bio_text):
         "development", "exec", "executive", "sr.", "jr.", "head", "asst", 
         "tech", "media", "creative", "gm", "operations"
     ]
-    
     if any(k in title_lower for k in strong_staff_keywords):
         return "COACH/STAFF"
 
-    # 2. AUTHORITY CHECK: PLAYER POSITIONS
-    # If it wasn't a coach, and it contains these, it is AUTOMATICALLY a Player.
+    # --- AUTHORITY RULE 2: PLAYER POSITIONS ---
+    # If title explicitly names a position, they are PLAYER.
     strong_player_positions = [
         "quarterback", "running back", "wide receiver", "tight end", 
         "offensive line", "defensive line", "linebacker", "defensive back",
@@ -185,20 +187,18 @@ def determine_role(title, bio_text):
         "qb", "rb", "wr", "te", "ol", "dl", "lb", "db", "cb", "s", "k", "p", "ls",
         "athlete", "star", "edge", "rush", "tackle", "guard", "center", "nose"
     ]
-    
     if any(p in title_lower for p in strong_player_positions):
         return "PLAYER"
     
-    # 3. FALLBACK: ONLY IF TITLE IS UNKNOWN
-    # If the title didn't match anything above (e.g. "Member", "Roster", "Unknown")
-    # Then we check the bio text for player indicators.
+    # --- FALLBACK: BIO SCAN ---
+    # Only if title is "Unknown" or generic, we check the bio.
     bio_sample = str(bio_text)[:1000].lower()
     player_bio_flags = ["class:", "height:", "weight:", "high school:", "hometown:", "lbs"]
     
     if any(f in bio_sample for f in player_bio_flags):
         return "PLAYER"
         
-    return "PLAYER" # Default to Player if we really can't tell
+    return "PLAYER" # Safe default
 
 def extract_real_title(bio):
     # Try to find a better title in the body text if the header failed
@@ -224,7 +224,7 @@ def parse_header(bio):
             extracted['School'] = parts[-1].strip()
             if len(parts) > 2: extracted['Title'] = parts[1].strip()
     
-    # If title looks generic, look harder
+    # Fix for schools like Nebraska where Title is missing/generic
     if "University" in extracted['Title'] or "Athletics" in extracted['Title'] or extracted['Title'] == "Unknown":
         better_title = extract_real_title(bio)
         if better_title:
@@ -233,7 +233,6 @@ def parse_header(bio):
     for alias, real in SCHOOL_ALIASES.items():
         if alias.lower() in extracted['School'].lower(): extracted['School'] = real
         
-    # Use STRICT Authority System
     extracted['Role'] = determine_role(extracted['Title'], bio)
     
     return extracted
@@ -297,10 +296,13 @@ if submit_button and keywords_str:
                         l_key = normalize_text(meta['Last'])
                         
                         match = {}
+                        # 1. Exact School Match
                         if (s_key, n_key) in master_lookup:
                             match = master_lookup[(s_key, n_key)]
+                        # 2. GLOBAL Name Match (Fixes "FSU" vs "Florida State" mismatch)
                         elif n_key in name_lookup:
                             match = name_lookup[n_key][0]
+                        # 3. Last Name Fallback
                         elif (s_key, l_key) in lastname_lookup:
                             match = lastname_lookup[(s_key, l_key)][0]
 
@@ -324,11 +326,9 @@ if submit_button and keywords_str:
 
         if results_found:
             df_res = pd.DataFrame(results_found).drop_duplicates(subset=['Name', 'School'])
-            
-            # Clean text for Excel
+            # CLEAN TEXT FOR EXCEL
             df_res['Full_Bio'] = df_res['Full_Bio'].astype(str).str.replace(r'[\r\n]+', ' ', regex=True)
             df_res['Context'] = df_res['Context'].astype(str).str.replace(r'[\r\n]+', ' ', regex=True)
-            
             df_res.sort_values(by=['Role', 'Name'], ascending=[True, True], inplace=True)
             st.session_state['search_results'] = df_res
         else:
