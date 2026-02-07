@@ -10,7 +10,7 @@ from datetime import datetime
 import time
 
 # --- 1. CONFIGURATION & STYLES ---
-st.set_page_config(page_title="Coulter Recruiting v1.18", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="Coulter Recruiting v1.19", page_icon="🏈", layout="wide")
 
 st.markdown("""
     <style>
@@ -48,7 +48,7 @@ st.markdown("""
 
 st.markdown("""
     <div class="header-container">
-        <div class="version-tag">v1.18</div>
+        <div class="version-tag">v1.19</div>
         <div class="main-title">🏈 COULTER RECRUITING</div>
         <div class="sub-title">Football Search Engine</div>
     </div>
@@ -59,13 +59,29 @@ GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/18kLsLZVPYehzEjlk
 
 # STRICT LISTS
 FOOTBALL_INDICATORS = ["football", "quarterback", "linebacker", "touchdown", "nfl", "bowl", "recruiting", "fbs", "fcs", "interception", "tackle", "gridiron"]
+
+# V1.19: Expanded Non-Football List to catch Fencing, Pistol, etc.
 NON_FOOTBALL_INDICATORS = {
-    "Volleyball": ["volleyball", "set", "spike", "libero"], "Baseball": ["baseball", "inning", "homerun", "pitcher"],
-    "Basketball": ["basketball", "nba", "dunk", "rebound"], "Soccer": ["soccer", "goal", "striker", "fifa"],
-    "Softball": ["softball"], "Track": ["track", "sprint"], "Swimming": ["swim", "dive"], "Lacrosse": ["lacrosse"],
-    "Equestrian": ["equestrian", "horse", "rider", "hunt seat"], "Rowing": ["rowing", "crew", "coxswain", "regatta"],
-    "Field Hockey": ["field hockey"], "Water Polo": ["water polo"]
+    "Volleyball": ["volleyball", "set", "spike", "libero"], 
+    "Baseball": ["baseball", "inning", "homerun", "pitcher", "dugout"],
+    "Basketball": ["basketball", "nba", "dunk", "rebound", "hoop"], 
+    "Soccer": ["soccer", "goal", "striker", "fifa"],
+    "Softball": ["softball"], 
+    "Track": ["track", "sprint", "marathon"], 
+    "Swimming": ["swim", "dive", "pool", "breaststroke"], 
+    "Lacrosse": ["lacrosse", "stick"],
+    "Equestrian": ["equestrian", "horse", "rider", "hunt seat"], 
+    "Rowing": ["rowing", "crew", "coxswain", "regatta"],
+    "Field Hockey": ["field hockey"], 
+    "Water Polo": ["water polo"],
+    "Fencing": ["fencing", "foil", "saber", "epee"],
+    "Pistol": ["pistol", "shooting", "rifle", "smallbore"],
+    "Gymnastics": ["gymnastics", "vault", "beam"],
+    "Skiing": ["skiing", "slalom", "nordic", "alpine"],
+    "Bowling": ["bowling", "kegler"],
+    "Wrestling": ["wrestling", "grapple", "mat"] # Careful with this one, but usually safe
 }
+
 POISON_PILLS_TEXT = ["Women's Flag", "Flag Football"]
 BAD_NAMES = [
     "Football Roster", "Football Schedule", "Composite Schedule", "Game Recap", 
@@ -86,7 +102,7 @@ SCHOOL_ALIASES = {
 }
 
 # --- 3. HELPER FUNCTIONS ---
-def normalize_text_v1_18(text):
+def normalize_text_v1_19(text):
     if pd.isna(text): return ""
     text = str(text).lower()
     text = text.replace('.', '').replace("'", "").strip()
@@ -96,7 +112,7 @@ def normalize_text_v1_18(text):
     return re.sub(r'[^a-z0-9]', '', text).strip()
 
 @st.cache_data(show_spinner=False)
-def load_lookup_v1_18():
+def load_lookup_v1_19():
     """Load coach database with TEAM PHOBIC COLUMN DETECTION."""
     df = None
     try:
@@ -188,9 +204,9 @@ def load_lookup_v1_18():
 
             rec = {'email': email, 'twitter': twitter, 'title': title, 'school': raw_school, 'name': full_name}
             
-            s_key = normalize_text_v1_18(raw_school)
-            n_key = normalize_text_v1_18(full_name)
-            l_key = normalize_text_v1_18(last)
+            s_key = normalize_text_v1_19(raw_school)
+            n_key = normalize_text_v1_19(full_name)
+            l_key = normalize_text_v1_19(last)
             
             if s_key: lookup[(s_key, n_key)] = rec
             if n_key not in global_name_lookup: global_name_lookup[n_key] = rec
@@ -200,16 +216,16 @@ def load_lookup_v1_18():
             
     return lookup, global_name_lookup, lastname_lookup, "Success"
 
-# *** V1.18: Cache Clear ***
-if "master_data_v1_18" not in st.session_state:
+# *** V1.19: Cache Clear ***
+if "master_data_v1_19" not in st.session_state:
     with st.status("Initializing Recruiting Engine...", expanded=True) as status:
         st.write("📂 Connecting to Master Database...")
-        data_tuple = load_lookup_v1_18()
+        data_tuple = load_lookup_v1_19()
         st.write("✅ Database Loaded!")
-        st.session_state["master_data_v1_18"] = data_tuple
+        st.session_state["master_data_v1_19"] = data_tuple
         status.update(label="System Ready!", state="complete", expanded=False)
 
-master_lookup, global_name_lookup, lastname_lookup, db_status = st.session_state["master_data_v1_18"]
+master_lookup, global_name_lookup, lastname_lookup, db_status = st.session_state["master_data_v1_19"]
 
 def detect_sport(bio):
     text = str(bio).lower()
@@ -229,7 +245,7 @@ def clean_player_title(title, bio_text):
     if "assistant" in t_clean or "coach" in t_clean or "manager" in t_clean: return title
     return "Football"
 
-def determine_role_v1_18(title, bio_text):
+def determine_role_v1_19(title, bio_text):
     title_lower = str(title).lower()
     if "coach" in title_lower: return "COACH/STAFF"
 
@@ -243,7 +259,7 @@ def determine_role_v1_18(title, bio_text):
     if any(f in bio_sample for f in ["class:", "height:", "weight:", "hometown:", "lbs"]): return "PLAYER"
     return "PLAYER"
 
-def parse_header_v1_18(bio):
+def parse_header_v1_19(bio):
     lines = [L.strip() for L in str(bio).split('\n') if L.strip()][:15]
     header = None
     for delimiter in [" - ", " | ", " : "]:
@@ -259,7 +275,19 @@ def parse_header_v1_18(bio):
             extracted['Last'] = parts[0].strip().split(' ')[-1]
             extracted['School'] = parts[-1].strip()
             if len(parts) > 2: extracted['Title'] = parts[1].strip()
-    
+            
+    # --- V1.19: SANITY CHECK FOR MISALIGNED COLUMNS ---
+    # If Name looks like a School (contains "University", "College", "Athletics")
+    name_check = extracted['Name'].lower() if extracted['Name'] else ""
+    if "university" in name_check or "college" in name_check or "athletics" in name_check:
+        # Try to swap or fix. Often headers are SCHOOL - NAME - TITLE
+        if extracted['Title'] and "university" not in extracted['Title'].lower():
+             # Swap Name and Title if Title looks like a Name
+             temp = extracted['Name']
+             extracted['Name'] = extracted['Title']
+             extracted['School'] = temp # Assume the "Name" was actually the School
+             extracted['Title'] = "Coach" # Default back to generic if lost
+
     if "University" in extracted['Title'] or "Athletics" in extracted['Title'] or extracted['Title'] == "Unknown":
         match = re.search(r'(?:Title|Position)[:\s]+([A-Za-z \-\&]+?)(?=\n|Email|Phone|Bio)', str(bio), re.IGNORECASE)
         if match: extracted['Title'] = match.group(1).strip()
@@ -271,7 +299,7 @@ def parse_header_v1_18(bio):
     for alias, real in SCHOOL_ALIASES.items():
         if alias.lower() in extracted['School'].lower(): extracted['School'] = real
         
-    extracted['Role'] = determine_role_v1_18(extracted['Title'], bio)
+    extracted['Role'] = determine_role_v1_19(extracted['Title'], bio)
     
     # --- V1.8: FORCE FOOTBALL TITLE FOR PLAYERS ---
     if extracted['Role'] == 'PLAYER':
@@ -357,16 +385,28 @@ if submit_button and keywords_str:
                     if mask.any():
                         matches = df_chunk[mask].copy()
                         for idx, row in matches.iterrows():
-                            meta = parse_header_v1_18(row['Full_Bio'])
+                            meta = parse_header_v1_19(row['Full_Bio'])
                             name = meta['Name'] or "Unknown"
                             
                             if any(b.lower() in str(name).lower() for b in BAD_NAMES): continue
                             if "football" in str(name).lower() or "athletics" in str(name).lower(): continue
+                            
+                            # --- V1.19: STRICT SPORT SANITATION ---
+                            # If School or Title mentions a non-football sport, discard row
+                            school_check = str(meta['School']).lower()
+                            title_check = str(meta['Title']).lower()
+                            is_poisoned = False
+                            for sport in NON_FOOTBALL_INDICATORS:
+                                if sport.lower() in school_check or sport.lower() in title_check:
+                                    is_poisoned = True
+                                    break
+                            if is_poisoned: continue
+
                             if detect_sport(row['Full_Bio']) != "Football": continue
                             
-                            s_key = normalize_text_v1_18(meta['School'])
-                            n_key = normalize_text_v1_18(name)
-                            l_key = normalize_text_v1_18(meta['Last'])
+                            s_key = normalize_text_v1_19(meta['School'])
+                            n_key = normalize_text_v1_19(name)
+                            l_key = normalize_text_v1_19(meta['Last'])
                             
                             match = {}
                             match_source = None
