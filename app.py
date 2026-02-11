@@ -10,7 +10,7 @@ from datetime import datetime
 import time
 
 # --- 1. CONFIGURATION & STYLES ---
-st.set_page_config(page_title="Coulter Recruiting v1.25", page_icon="🏈", layout="wide")
+st.set_page_config(page_title="Coulter Recruiting v1.26", page_icon="🏈", layout="wide")
 
 st.markdown("""
     <style>
@@ -48,7 +48,7 @@ st.markdown("""
 
 st.markdown("""
     <div class="header-container">
-        <div class="version-tag">v1.25</div>
+        <div class="version-tag">v1.26</div>
         <div class="main-title">🏈 COULTER RECRUITING</div>
         <div class="sub-title">Football Search Engine</div>
     </div>
@@ -82,11 +82,12 @@ NON_FOOTBALL_INDICATORS = {
     "Wrestling": ["wrestling", "grapple", "mat"] 
 }
 
-# V1.22: BANNED SCHOOL NAMES (Junk Headers)
+# V1.26: BANNED SCHOOL NAMES (Junk Headers)
 BANNED_SCHOOL_NAMES = [
     "official site", "official website", "copyright", "powered by", "terms of service",
     "privacy policy", "accessibility", "sidearm sports", "ad blocker", "main navigation",
-    "skip to main", "pause all rotators", "composite calendar", "related videos"
+    "skip to main", "pause all rotators", "composite calendar", "related videos",
+    "ticket office", "student-athlete", "staff directory"
 ]
 
 POISON_PILLS_TEXT = ["Women's Flag", "Flag Football"]
@@ -108,12 +109,12 @@ SCHOOL_ALIASES = {
     "NC State": "North Carolina State", "UVA": "Virginia", "VT": "Virginia Tech",
     "GT": "Georgia Tech", "Pitt": "Pittsburgh", "Wash St": "Washington State",
     "Miss St": "Mississippi State", "Okla St": "Oklahoma State", "Mich St": "Michigan State",
-    "Ohio State University": "Ohio State", # V1.24 Fix
-    "The Ohio State University": "Ohio State" # V1.24 Fix
+    "Ohio State University": "Ohio State",
+    "The Ohio State University": "Ohio State"
 }
 
 # --- 3. HELPER FUNCTIONS ---
-def normalize_text_v1_25(text):
+def normalize_text_v1_26(text):
     if pd.isna(text): return ""
     text = str(text).lower()
     text = text.replace('.', '').replace("'", "").strip()
@@ -123,7 +124,7 @@ def normalize_text_v1_25(text):
     return re.sub(r'[^a-z0-9]', '', text).strip()
 
 @st.cache_data(show_spinner=False)
-def load_lookup_v1_25():
+def load_lookup_v1_26():
     """Load coach database with TEAM PHOBIC COLUMN DETECTION."""
     df = None
     try:
@@ -215,9 +216,9 @@ def load_lookup_v1_25():
 
             rec = {'email': email, 'twitter': twitter, 'title': title, 'school': raw_school, 'name': full_name}
             
-            s_key = normalize_text_v1_25(raw_school)
-            n_key = normalize_text_v1_25(full_name)
-            l_key = normalize_text_v1_25(last)
+            s_key = normalize_text_v1_26(raw_school)
+            n_key = normalize_text_v1_26(full_name)
+            l_key = normalize_text_v1_26(last)
             
             if s_key: lookup[(s_key, n_key)] = rec
             if n_key not in global_name_lookup: global_name_lookup[n_key] = rec
@@ -227,16 +228,16 @@ def load_lookup_v1_25():
             
     return lookup, global_name_lookup, lastname_lookup, "Success"
 
-# *** V1.25: Cache Clear ***
-if "master_data_v1_25" not in st.session_state:
+# *** V1.26: Cache Clear ***
+if "master_data_v1_26" not in st.session_state:
     with st.status("Initializing Recruiting Engine...", expanded=True) as status:
         st.write("📂 Connecting to Master Database...")
-        data_tuple = load_lookup_v1_25()
+        data_tuple = load_lookup_v1_26()
         st.write("✅ Database Loaded!")
-        st.session_state["master_data_v1_25"] = data_tuple
+        st.session_state["master_data_v1_26"] = data_tuple
         status.update(label="System Ready!", state="complete", expanded=False)
 
-master_lookup, global_name_lookup, lastname_lookup, db_status = st.session_state["master_data_v1_25"]
+master_lookup, global_name_lookup, lastname_lookup, db_status = st.session_state["master_data_v1_26"]
 
 def detect_sport(bio):
     text = str(bio).lower()
@@ -256,11 +257,18 @@ def clean_player_title(title, bio_text):
     if "assistant" in t_clean or "coach" in t_clean or "manager" in t_clean: return title
     return "Football"
 
-def determine_role_v1_25(title, bio_text):
+def determine_role_v1_26(title, bio_text):
     title_lower = str(title).lower()
     if "coach" in title_lower: return "COACH/STAFF"
 
-    strong_staff = ["coordinator", "director", "manager", "analyst", "assistant", "specialist", "trainer", "video", "recruiting", "personnel", "chief", "scout", "dietitian", "nutrition", "ga", "grad assistant", "intern", "fellow", "admin", "strength", "conditioning", "performance", "player dev", "exec", "head", "gm", "ops"]
+    # V1.26: Expanded Staff List (Medical, Ops, Academics)
+    strong_staff = [
+        "coordinator", "director", "manager", "analyst", "assistant", "specialist", 
+        "trainer", "video", "recruiting", "personnel", "chief", "scout", 
+        "dietitian", "nutrition", "ga", "grad assistant", "intern", "fellow", 
+        "admin", "strength", "conditioning", "performance", "player dev", 
+        "exec", "head", "gm", "ops", "medicine", "doctor", "dr.", "physician", "academic"
+    ]
     if any(k in title_lower for k in strong_staff): return "COACH/STAFF"
 
     strong_player = ["quarterback", "running back", "wide receiver", "tight end", "offensive line", "defensive line", "linebacker", "defensive back", "cornerback", "safety", "kicker", "punter", "snapper", "qb", "rb", "wr", "te", "ol", "dl", "lb", "db", "cb", "s", "k", "p", "ls", "athlete", "edge", "rush", "tackle", "guard", "center"]
@@ -270,7 +278,7 @@ def determine_role_v1_25(title, bio_text):
     if any(f in bio_sample for f in ["class:", "height:", "weight:", "hometown:", "lbs"]): return "PLAYER"
     return "PLAYER"
 
-def parse_header_v1_25(bio):
+def parse_header_v1_26(bio):
     lines = [L.strip() for L in str(bio).split('\n') if L.strip()][:15]
     header = None
     for delimiter in [" - ", " | ", " : "]:
@@ -299,7 +307,7 @@ def parse_header_v1_25(bio):
     for sport in NON_FOOTBALL_INDICATORS:
         if sport.lower() in name_check: return None
 
-    # 3. Kill "Official Site" or "Powered By" masquerading as School/Name
+    # 3. Kill "Official Site" in School/Name
     for ban in BANNED_SCHOOL_NAMES:
         if ban in school_check or ban in name_check: return None
 
@@ -317,16 +325,17 @@ def parse_header_v1_25(bio):
 
     # --- v1.23: CLEAN SCHOOL NAME (REMOVE 'ATHLETICS' AND 'FOOTBALL') ---
     if extracted['School']:
-        # Strip "Athletics"
         extracted['School'] = extracted['School'].replace("Athletics", "").strip()
-        # Strip "Football" from school name only (e.g. "Ohio State Football")
         if extracted['School'].endswith(" Football"):
              extracted['School'] = extracted['School'].replace(" Football", "").strip()
+        # V1.26: BANNED SCHOOL FIX (Set to Unknown if generic)
+        if any(b in extracted['School'].lower() for b in BANNED_SCHOOL_NAMES):
+            extracted['School'] = "Unknown"
 
     for alias, real in SCHOOL_ALIASES.items():
         if alias.lower() in extracted['School'].lower(): extracted['School'] = real
         
-    extracted['Role'] = determine_role_v1_25(extracted['Title'], bio)
+    extracted['Role'] = determine_role_v1_26(extracted['Title'], bio)
     
     # --- V1.8: FORCE FOOTBALL TITLE FOR PLAYERS ---
     if extracted['Role'] == 'PLAYER':
@@ -339,11 +348,9 @@ def get_smart_snippet(text, keyword):
     clean_text = str(text).replace(chr(10), ' ').replace(chr(13), ' ')
     
     # 1. Look for STRICT Word Matches (Prevent 'JaylenColumbus')
-    # \b matches a word boundary (space, punctuation, start/end of line)
     matches = list(re.finditer(rf"\b{re.escape(keyword)}\b", clean_text, re.IGNORECASE))
     
     if not matches:
-        # Fallback to loose match if strict fails, but careful
         matches = list(re.finditer(re.escape(keyword), clean_text, re.IGNORECASE))
         if not matches:
             return "" 
@@ -434,7 +441,7 @@ if submit_button and keywords_str:
                     if mask.any():
                         matches = df_chunk[mask].copy()
                         for idx, row in matches.iterrows():
-                            meta = parse_header_v1_25(row['Full_Bio'])
+                            meta = parse_header_v1_26(row['Full_Bio'])
                             
                             # --- V1.22: SKIP BAD ROWS ---
                             if meta is None: continue
@@ -456,9 +463,9 @@ if submit_button and keywords_str:
 
                             if detect_sport(row['Full_Bio']) != "Football": continue
                             
-                            s_key = normalize_text_v1_25(meta['School'])
-                            n_key = normalize_text_v1_25(name)
-                            l_key = normalize_text_v1_25(meta['Last'])
+                            s_key = normalize_text_v1_26(meta['School'])
+                            n_key = normalize_text_v1_26(name)
+                            l_key = normalize_text_v1_26(meta['Last'])
                             
                             match = {}
                             match_source = None
